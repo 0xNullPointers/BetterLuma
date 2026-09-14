@@ -10,6 +10,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -38,10 +40,12 @@ namespace {
     using CR_GetAchievements_t    = uint32_t (*)(uint32_t, CloudRedirectHost::AchievementBlock*, uint32_t);
     using CR_InstallVtableHooks_t = bool (*)();
 
-    std::mutex           g_mutex;
-    std::atomic<bool>    g_active{false};
-    std::atomic<int32_t> g_inFlightCalls{0};
-    HMODULE              g_module = nullptr;
+    std::mutex              g_mutex;
+    std::mutex              g_drainMutex;
+    std::condition_variable g_drainCv;
+    std::atomic<bool>       g_active{false};
+    std::atomic<int32_t>    g_inFlightCalls{0};
+    HMODULE                 g_module = nullptr;
 
     CR_InitCloudSave_t      g_initCloudSave      = nullptr;
     CR_HandleCloudRpc_t     g_handleCloudRpc     = nullptr;
@@ -155,6 +159,13 @@ namespace {
         }
     }
 
+    static void ReleaseInFlight(std::atomic<int32_t>& counter) {
+        if (counter.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            std::lock_guard<std::mutex> drainLock(g_drainMutex);
+            g_drainCv.notify_all();
+        }
+    }
+
     // Guard object tracking in-flight invocations and holding an OS module reference
     // to guarantee the DLL physical memory pages cannot be unmapped while in use.
     struct InFlightGuard {
@@ -176,13 +187,13 @@ namespace {
             }
 
             if (!valid) {
-                counter.fetch_sub(1, std::memory_order_acq_rel);
+                ReleaseInFlight(counter);
             }
         }
 
         ~InFlightGuard() {
             if (valid) {
-                counter.fetch_sub(1, std::memory_order_acq_rel);
+                ReleaseInFlight(counter);
                 if (hModule) {
                     FreeLibrary(hModule);
                     hModule = nullptr;
@@ -510,35 +521,47 @@ namespace CloudRedirectHost {
         std::lock_guard<std::mutex> lock(g_mutex);
         if (!g_active.exchange(false, std::memory_order_acq_rel)) return;
 
-        // Drain in-flight calls before invoking shutdown export or unmapping module
-        constexpr int kMaxDrainIterations = 200;
-        for (int i = 0; i < kMaxDrainIterations && g_inFlightCalls.load(std::memory_order_acquire) > 0; ++i) {
-            Sleep(10);
+        // Drain in-flight calls using condition variable with a safety timeout
+        bool drained = false;
+        {
+            std::unique_lock<std::mutex> drainLock(g_drainMutex);
+            drained = g_drainCv.wait_for(drainLock, std::chrono::seconds(3), [&] {
+                return g_inFlightCalls.load(std::memory_order_acquire) == 0;
+            });
         }
 
         int32_t remaining = g_inFlightCalls.load(std::memory_order_acquire);
-        if (remaining > 0) {
-            LOG_WARN("CloudRedirect: shutdown proceeding with {} in-flight call(s) still active; module will remain pinned until they complete", remaining);
-        } else if (g_shutdownFn) {
-            SafeInvokeShutdown(g_shutdownFn);
-        }
+        if (!drained || remaining > 0) {
+            LOG_WARN("CloudRedirect: shutdown timed out with {} in-flight call(s) still active; module permanently pinned to prevent crash on unmapped code", remaining);
+            if (g_module) {
+                HMODULE pinnedMod = nullptr;
+                GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                                   reinterpret_cast<LPCWSTR>(g_module), &pinnedMod);
+                // Do not invoke CR_Shutdown or call FreeLibrary; keep exports intact for active callers
+                g_module = nullptr;
+            }
+        } else {
+            if (g_shutdownFn) {
+                SafeInvokeShutdown(g_shutdownFn);
+            }
 
-        g_initCloudSave      = nullptr;
-        g_handleCloudRpc     = nullptr;
-        g_setApps            = nullptr;
-        g_isApp              = nullptr;
-        g_shutdownFn         = nullptr;
-        g_enableStatsSync    = nullptr;
-        g_setAccountId       = nullptr;
-        g_notifyAppRunning   = nullptr;
-        g_notifyStatsStored  = nullptr;
-        g_getAchievements    = nullptr;
-        g_installVtableHooks = nullptr;
-        if (g_module) {
-            FreeLibrary(g_module);
-            g_module = nullptr;
+            g_initCloudSave      = nullptr;
+            g_handleCloudRpc     = nullptr;
+            g_setApps            = nullptr;
+            g_isApp              = nullptr;
+            g_shutdownFn         = nullptr;
+            g_enableStatsSync    = nullptr;
+            g_setAccountId       = nullptr;
+            g_notifyAppRunning   = nullptr;
+            g_notifyStatsStored  = nullptr;
+            g_getAchievements    = nullptr;
+            g_installVtableHooks = nullptr;
+            if (g_module) {
+                FreeLibrary(g_module);
+                g_module = nullptr;
+            }
+            LOG_INFO("CloudRedirect: shut down");
         }
-        LOG_INFO("CloudRedirect: shut down");
     }
 
 } // namespace CloudRedirectHost
