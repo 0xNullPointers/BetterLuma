@@ -129,6 +129,8 @@ namespace {
     // ── PID transfer bypass hook state (prevents detachment of single-process games) ──
     uint8_t* g_pidTransferCheckTarget = nullptr;
     uint8_t  g_pidTransferCheckOriginalBytes[6]{};
+    uint64_t g_pidTransferCheckJumpTarget = 0;
+    uint64_t g_pidTransferCheckFallthroughTarget = 0;
 
     static uint8_t* FindPidTransferCheckSite(HMODULE hMod) {
         if (!hMod) return nullptr;
@@ -643,6 +645,13 @@ namespace {
             // while ALSO tracking it under 480! Playtime, Stop button, and multiplayer presence all stay alive!
             if (g_pidTransferCheckTarget
                 && ctx->Rip == reinterpret_cast<uint64_t>(g_pidTransferCheckTarget)) {
+                // Verify saved instruction bytes match JNE rel32 pattern (0F 85 ?? ?? ?? ??)
+                if (g_pidTransferCheckOriginalBytes[0] != 0x0F || g_pidTransferCheckOriginalBytes[1] != 0x85) {
+                    LOG_MISC_ERROR("PidTransferCheck: opcode verification failed (expected 0F 85, got {:02X} {:02X})",
+                                   g_pidTransferCheckOriginalBytes[0], g_pidTransferCheckOriginalBytes[1]);
+                    return EXCEPTION_CONTINUE_SEARCH;
+                }
+
                 uint64_t newGameId = 0;
                 SafeReadUint64(reinterpret_cast<const void*>(ctx->Rdi), newGameId);
                 AppId_t newAppId = static_cast<AppId_t>(newGameId & 0xFFFFFF);
@@ -653,6 +662,13 @@ namespace {
                 int32_t disp = *reinterpret_cast<const int32_t*>(g_pidTransferCheckOriginalBytes + 2);
                 uint64_t jumpTarget = reinterpret_cast<uint64_t>(g_pidTransferCheckTarget + 6 + disp);
                 uint64_t fallthroughTarget = reinterpret_cast<uint64_t>(g_pidTransferCheckTarget + 6);
+
+                // Ensure computed targets match pre-validated initialization targets
+                if (g_pidTransferCheckJumpTarget != 0 && jumpTarget != g_pidTransferCheckJumpTarget) {
+                    LOG_MISC_ERROR("PidTransferCheck: jump target integrity check failed (expected 0x{:X}, got 0x{:X})",
+                                   g_pidTransferCheckJumpTarget, jumpTarget);
+                    return EXCEPTION_CONTINUE_SEARCH;
+                }
 
                 if (!oldAppId && pid) {
                     oldAppId = SteamCapture::GetOnlineFixAppForPid(pid);
@@ -726,12 +742,25 @@ namespace SteamCapture {
         g_pidTransferCheckTarget = FindPidTransferCheckSite(diversion_hModule);
         if (g_pidTransferCheckTarget) {
             memcpy(g_pidTransferCheckOriginalBytes, g_pidTransferCheckTarget, sizeof(g_pidTransferCheckOriginalBytes));
-            LOG_MISC_INFO("PidTransferCheck: VEH trap armed @ 0x{:X}, orig bytes: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
-                          reinterpret_cast<uintptr_t>(g_pidTransferCheckTarget),
-                          g_pidTransferCheckOriginalBytes[0], g_pidTransferCheckOriginalBytes[1],
-                          g_pidTransferCheckOriginalBytes[2], g_pidTransferCheckOriginalBytes[3],
-                          g_pidTransferCheckOriginalBytes[4], g_pidTransferCheckOriginalBytes[5]);
-            VehUtil::ArmInt3(g_pidTransferCheckTarget);
+            // Verify original instruction bytes match JNE rel32 pattern (0F 85 ?? ?? ?? ??)
+            if (g_pidTransferCheckOriginalBytes[0] == 0x0F && g_pidTransferCheckOriginalBytes[1] == 0x85) {
+                int32_t disp = *reinterpret_cast<const int32_t*>(g_pidTransferCheckOriginalBytes + 2);
+                g_pidTransferCheckJumpTarget = reinterpret_cast<uint64_t>(g_pidTransferCheckTarget + 6 + disp);
+                g_pidTransferCheckFallthroughTarget = reinterpret_cast<uint64_t>(g_pidTransferCheckTarget + 6);
+                LOG_MISC_INFO("PidTransferCheck: VEH trap armed @ 0x{:X}, orig bytes: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} (jump: 0x{:X}, fallthrough: 0x{:X})",
+                              reinterpret_cast<uintptr_t>(g_pidTransferCheckTarget),
+                              g_pidTransferCheckOriginalBytes[0], g_pidTransferCheckOriginalBytes[1],
+                              g_pidTransferCheckOriginalBytes[2], g_pidTransferCheckOriginalBytes[3],
+                              g_pidTransferCheckOriginalBytes[4], g_pidTransferCheckOriginalBytes[5],
+                              g_pidTransferCheckJumpTarget, g_pidTransferCheckFallthroughTarget);
+                VehUtil::ArmInt3(g_pidTransferCheckTarget);
+            } else {
+                LOG_MISC_WARN("PidTransferCheck: opcode verification failed ({:02X} {:02X}), expected 0F 85, bypass disabled",
+                              g_pidTransferCheckOriginalBytes[0], g_pidTransferCheckOriginalBytes[1]);
+                g_pidTransferCheckTarget = nullptr;
+                g_pidTransferCheckJumpTarget = 0;
+                g_pidTransferCheckFallthroughTarget = 0;
+            }
         } else {
             LOG_MISC_WARN("PidTransferCheck: target not found, PID transfer bypass disabled");
         }
@@ -770,6 +799,8 @@ namespace SteamCapture {
         if (g_pidTransferCheckTarget && *g_pidTransferCheckTarget == 0xCC)
             VehUtil::RestoreByte(g_pidTransferCheckTarget, g_pidTransferCheckOriginalBytes[0]);
         g_pidTransferCheckTarget = nullptr;
+        g_pidTransferCheckJumpTarget = 0;
+        g_pidTransferCheckFallthroughTarget = 0;
         memset(g_pidTransferCheckOriginalBytes, 0, sizeof(g_pidTransferCheckOriginalBytes));
 
         LM_TX_BEGIN();
