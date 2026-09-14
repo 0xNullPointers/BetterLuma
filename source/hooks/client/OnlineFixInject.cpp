@@ -21,17 +21,25 @@
 
 namespace {
 
-    std::mutex g_queueLock;
-    std::unordered_map<std::wstring, AppId_t> g_queue;
+    struct QueuedInjection {
+        AppId_t      appId = 0;
+        std::wstring expectedExePath;     // Normalized full executable path
+        std::wstring expectedInstallDir;   // Normalized install directory
+        std::wstring expectedBasename;     // Lowercase basename (e.g. game.exe)
+        uint64_t     queuedAt = 0;
+    };
 
     struct PendingRoute {
-        AppId_t appId = 0;
+        AppId_t      appId = 0;
         std::wstring launchExe;
-        uint64_t queuedAt = 0;
+        std::wstring expectedExePath;
+        std::wstring expectedInstallDir;
+        uint64_t     queuedAt = 0;
         std::unordered_set<uint32_t> fallbackPids;
     };
 
-    // Support multi-game concurrent OnlineFix fallback routes.
+    std::mutex                                g_queueLock;
+    std::vector<QueuedInjection>              g_queue;
     std::unordered_map<AppId_t, PendingRoute> g_pendingRoutes;
 
     std::wstring LowerBasename(LPCWSTR path) {
@@ -40,6 +48,58 @@ namespace {
         std::transform(name.begin(), name.end(), name.begin(),
             [](wchar_t c){ return static_cast<wchar_t>(towlower(c)); });
         return name;
+    }
+
+    std::wstring NormalizePath(std::wstring_view path) {
+        while (!path.empty() && (path.front() == L'"' || path.front() == L' ' || path.front() == L'\t'))
+            path.remove_prefix(1);
+        while (!path.empty() && (path.back() == L'"' || path.back() == L' ' || path.back() == L'\t'))
+            path.remove_suffix(1);
+        if (path.empty()) return {};
+
+        std::wstring out;
+        out.reserve(path.size());
+        for (wchar_t c : path) {
+            if (c == L'/') c = L'\\';
+            out.push_back(static_cast<wchar_t>(towlower(c)));
+        }
+        while (out.size() > 3 && out.back() == L'\\') {
+            out.pop_back();
+        }
+        return out;
+    }
+
+    bool IsSubpathOf(std::wstring_view child, std::wstring_view parent) {
+        if (parent.empty() || child.size() < parent.size())
+            return false;
+        if (child.substr(0, parent.size()) != parent)
+            return false;
+        if (child.size() == parent.size())
+            return true;
+        wchar_t nextChar = child[parent.size()];
+        return nextChar == L'\\' || nextChar == L'/';
+    }
+
+    std::wstring DeriveInstallDir(std::wstring_view normPath) {
+        if (normPath.empty()) return {};
+        constexpr std::wstring_view kCommon = L"\\steamapps\\common\\";
+        size_t pos = normPath.find(kCommon);
+        if (pos != std::wstring_view::npos) {
+            size_t start = pos + kCommon.size();
+            size_t nextSlash = normPath.find(L'\\', start);
+            if (nextSlash != std::wstring_view::npos) {
+                return std::wstring(normPath.substr(0, nextSlash));
+            }
+        }
+        std::filesystem::path p(normPath);
+        std::filesystem::path parent = p.parent_path();
+        std::wstring parentName = parent.filename().wstring();
+        if (parentName == L"win64" || parentName == L"x64" || parentName == L"bin" || parentName == L"binaries") {
+            if (parent.has_parent_path()) {
+                parent = parent.parent_path();
+            }
+        }
+        return NormalizePath(parent.wstring());
     }
 
     std::wstring ExeFromCmd(LPCWSTR cmd) {
@@ -96,25 +156,72 @@ namespace {
         return out;
     }
 
-    AppId_t ClaimPending(LPCWSTR app, LPCWSTR cmd) {
-        std::wstring key = LowerBasename(app);
-        if (key.empty()) key = LowerBasename(ExeFromCmd(cmd).c_str());
-        if (key.empty()) {
-            LOG_ONLINEFIX_DEBUG("claim miss exe=(empty)");
-            return 0;
+    bool ClaimPending(LPCWSTR app, LPCWSTR cmd, LPCWSTR cwd, QueuedInjection& outClaimed) {
+        std::wstring rawExe;
+        if (app && *app) {
+            rawExe = app;
+        } else if (cmd && *cmd) {
+            rawExe = ExeFromCmd(cmd);
+        }
+        if (rawExe.empty()) {
+            LOG_ONLINEFIX_DEBUG("claim miss: empty exe");
+            return false;
         }
 
-        std::lock_guard lk(g_queueLock);
-        auto it = g_queue.find(key);
-        if (it == g_queue.end()) {
-            LOG_ONLINEFIX_DEBUG("claim miss exe={}", NarrowPath(key));
-            return 0;
+        std::filesystem::path rawPath(rawExe);
+        if (rawPath.is_relative() && cwd && *cwd) {
+            rawPath = std::filesystem::path(cwd) / rawPath;
         }
-        AppId_t id = it->second;
+        std::wstring normCandidate = NormalizePath(rawPath.wstring());
+        std::wstring candidateBasename = LowerBasename(normCandidate.c_str());
+
+        std::lock_guard lk(g_queueLock);
+        uint64_t now = GetTickCount64();
+        // Purge expired items older than 60 seconds
+        std::erase_if(g_queue, [now](const QueuedInjection& q) {
+            return (now - q.queuedAt) > 60000;
+        });
+
+        auto it = g_queue.end();
+        // 1. Exact full path match
+        it = std::find_if(g_queue.begin(), g_queue.end(), [&](const QueuedInjection& q) {
+            return !q.expectedExePath.empty() && q.expectedExePath == normCandidate;
+        });
+
+        // 2. Install dir prefix + basename match
+        if (it == g_queue.end()) {
+            it = std::find_if(g_queue.begin(), g_queue.end(), [&](const QueuedInjection& q) {
+                return q.expectedBasename == candidateBasename &&
+                       IsSubpathOf(normCandidate, q.expectedInstallDir);
+            });
+        }
+
+        // 3. Basename match with cwd check if candidate had no absolute directory
+        if (it == g_queue.end() && !candidateBasename.empty()) {
+            it = std::find_if(g_queue.begin(), g_queue.end(), [&](const QueuedInjection& q) {
+                if (q.expectedBasename != candidateBasename) return false;
+                if (cwd && *cwd) {
+                    std::wstring normCwd = NormalizePath(cwd);
+                    return IsSubpathOf(normCwd, q.expectedInstallDir);
+                }
+                return true;
+            });
+        }
+
+        if (it == g_queue.end()) {
+            LOG_ONLINEFIX_DEBUG("claim miss exe={} cwd={}", NarrowPath(normCandidate), cwd ? NarrowPath(cwd) : "-");
+            return false;
+        }
+
+        outClaimed = *it;
         g_queue.erase(it);
-        LOG_ONLINEFIX_INFO("claim hit appid={} exe={}", id, NarrowPath(key));
-        HookStatus::RecordOnlineFixPayload(id, 0, NarrowPath(key), "claimed", "createprocess");
-        return id;
+
+        LOG_ONLINEFIX_INFO("claim hit appid={} exe=\"{}\" installDir=\"{}\"",
+                           outClaimed.appId, NarrowPath(outClaimed.expectedExePath),
+                           NarrowPath(outClaimed.expectedInstallDir));
+        HookStatus::RecordOnlineFixPayload(outClaimed.appId, 0, NarrowPath(outClaimed.expectedBasename),
+                                           "claimed", "createprocess");
+        return true;
     }
 
     AppId_t ClaimFallbackRoute(uint32_t pid, std::string_view imageName, AppId_t expectedAppId) {
@@ -210,8 +317,11 @@ namespace {
                 : oCreateProcessW(app, cmd, pa, ta, inherit, f, env, cwd, si, pi);
         };
 
-        AppId_t appId = ClaimPending(app, cmd);
-        if (!appId) return fwd(flags);
+        QueuedInjection claimed;
+        bool hasClaim = ClaimPending(app, cmd, cwd, claimed);
+        if (!hasClaim) return fwd(flags);
+
+        AppId_t appId = claimed.appId;
         if (PayloadPath[0] == 0) {
             LOG_ONLINEFIX_WARN("appid={} payload path empty, forwarding without injection", appId);
             return fwd(flags);
@@ -223,6 +333,26 @@ namespace {
             return ok;
         }
 
+        // Validate target process image path directly from kernel before injecting
+        wchar_t realImagePath[MAX_PATH * 2] = {};
+        DWORD pathLen = static_cast<DWORD>(std::size(realImagePath));
+        if (QueryFullProcessImageNameW(pi->hProcess, 0, realImagePath, &pathLen) && pathLen > 0) {
+            std::wstring normReal = NormalizePath(realImagePath);
+            bool valid = (normReal == claimed.expectedExePath) ||
+                         IsSubpathOf(normReal, claimed.expectedInstallDir);
+            if (!valid) {
+                LOG_ONLINEFIX_WARN("SECURITY: Aborting payload injection for appid={} pid={}: "
+                                   "spawned image \"{}\" is NOT within expected install dir \"{}\"",
+                                   appId, pi->dwProcessId, NarrowPath(normReal),
+                                   NarrowPath(claimed.expectedInstallDir));
+                HookStatus::RecordOnlineFixPayload(appId, pi->dwProcessId,
+                                                   NarrowPath(LowerBasename(normReal.c_str())),
+                                                   "path-validation-failed", "security-reject");
+                if (!(flags & CREATE_SUSPENDED)) ResumeThread(pi->hThread);
+                return ok;
+            }
+        }
+
         std::wstring wPayload = WideFromUtf8(PayloadPath);
         bool injected = (!wPayload.empty()) && InjectPayload(pi->hProcess, wPayload.c_str());
         // Associate newly spawned primary process PID with its OnlineFix app.
@@ -232,7 +362,7 @@ namespace {
         LOG_ONLINEFIX_INFO("appid={} pid={} payload {}", appId, pi->dwProcessId,
                            injected ? "loaded" : "FAILED");
         HookStatus::RecordOnlineFixPayload(appId, pi->dwProcessId,
-                                           app ? NarrowPath(LowerBasename(app)) : std::string{},
+                                           NarrowPath(claimed.expectedBasename),
                                            injected ? "claimed-loaded" : "claimed-failed",
                                            "createprocess");
 
@@ -323,20 +453,38 @@ namespace OnlineFixInject {
         if (!realAppId || !exePath || !*exePath) return;
 
         std::wstring wexe = WideFromUtf8(exePath);
-        std::wstring key = LowerBasename(wexe.c_str());
+        std::wstring normExe = NormalizePath(wexe);
+        std::wstring key = LowerBasename(normExe.c_str());
         if (key.empty()) {
             LOG_ONLINEFIX_WARN("queue skipped appid={} exe=\"{}\"", realAppId, exePath);
             return;
         }
+        std::wstring installDir = DeriveInstallDir(normExe);
 
         std::lock_guard lk(g_queueLock);
-        g_queue[key] = realAppId;
+        uint64_t now = GetTickCount64();
+        std::erase_if(g_queue, [now](const QueuedInjection& q) {
+            return (now - q.queuedAt) > 60000;
+        });
+
+        QueuedInjection q;
+        q.appId = realAppId;
+        q.expectedExePath = normExe;
+        q.expectedInstallDir = installDir;
+        q.expectedBasename = key;
+        q.queuedAt = now;
+        g_queue.push_back(q);
+
         PendingRoute& route = g_pendingRoutes[realAppId];
         route.appId = realAppId;
         route.launchExe = key;
-        route.queuedAt = GetTickCount64();
+        route.expectedExePath = normExe;
+        route.expectedInstallDir = installDir;
+        route.queuedAt = now;
         route.fallbackPids.clear();
-        LOG_ONLINEFIX_INFO("queued appid={} exe={}", realAppId, NarrowPath(key));
+
+        LOG_ONLINEFIX_INFO("queued appid={} exe=\"{}\" installDir=\"{}\"",
+                           realAppId, NarrowPath(normExe), NarrowPath(installDir));
         HookStatus::RecordOnlineFixPayload(realAppId, 0, NarrowPath(key), "queued", "manual-route");
     }
 
@@ -356,23 +504,52 @@ namespace OnlineFixInject {
         AppId_t queuedAppId = ClaimFallbackRoute(pid, imageName, realAppId);
         if (!queuedAppId) return false;
 
+        // Security validation: verify child process image path against expected game install directory
+        {
+            std::lock_guard lk(g_queueLock);
+            auto it = g_pendingRoutes.find(queuedAppId);
+            if (it != g_pendingRoutes.end() && !it->second.expectedInstallDir.empty()) {
+                HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+                if (hProc) {
+                    wchar_t realImagePath[MAX_PATH * 2] = {};
+                    DWORD pathLen = static_cast<DWORD>(std::size(realImagePath));
+                    if (QueryFullProcessImageNameW(hProc, 0, realImagePath, &pathLen) && pathLen > 0) {
+                        std::wstring normReal = NormalizePath(realImagePath);
+                        bool valid = (normReal == it->second.expectedExePath) ||
+                                     IsSubpathOf(normReal, it->second.expectedInstallDir);
+                        if (!valid) {
+                            LOG_ONLINEFIX_WARN("SECURITY: Aborting fallback injection for appid={} pid={}: "
+                                               "process image \"{}\" is outside expected install dir \"{}\"",
+                                               queuedAppId, pid, NarrowPath(normReal),
+                                               NarrowPath(it->second.expectedInstallDir));
+                            CloseHandle(hProc);
+                            HookStatus::RecordOnlineFixPayload(queuedAppId, pid, ImageForLog(imageName),
+                                                               "fallback-failed", "security-reject");
+                            return false;
+                        }
+                    }
+                    CloseHandle(hProc);
+                }
+            }
+        }
+
         if (PayloadPath[0] == 0) {
             LOG_ONLINEFIX_WARN("fallback appid={} pid={} payload path empty", queuedAppId, pid);
             HookStatus::RecordOnlineFixPayload(queuedAppId, pid, ImageForLog(imageName),
-                                               "fallback-failed", "payload-empty");
+                                                "fallback-failed", "payload-empty");
             return false;
         }
         if (!Settings::onlineFixInjectEnabled) {
             LOG_ONLINEFIX_INFO("fallback appid={} pid={} injection disabled by config", queuedAppId, pid);
             HookStatus::RecordOnlineFixPayload(queuedAppId, pid, ImageForLog(imageName),
-                                               "fallback-disabled", "config");
+                                                "fallback-disabled", "config");
             return false;
         }
         if (GetFileAttributesA(PayloadPath) == INVALID_FILE_ATTRIBUTES) {
             LOG_ONLINEFIX_WARN("fallback appid={} pid={} payload DLL missing path=\"{}\"",
                                queuedAppId, pid, PayloadPath);
             HookStatus::RecordOnlineFixPayload(queuedAppId, pid, ImageForLog(imageName),
-                                               "fallback-failed", "payload-missing");
+                                                "fallback-failed", "payload-missing");
             return false;
         }
 
@@ -383,8 +560,8 @@ namespace OnlineFixInject {
                                queuedAppId, pid,
                                loaded.alreadyLoaded ? "already-loaded" : "loaded");
             HookStatus::RecordOnlineFixPayload(queuedAppId, pid, ImageForLog(imageName),
-                                               loaded.alreadyLoaded ? "fallback-already-loaded" : "fallback-loaded",
-                                               "pipewatch-eos");
+                                                loaded.alreadyLoaded ? "fallback-already-loaded" : "fallback-loaded",
+                                                "pipewatch-eos");
             return true;
         }
 
