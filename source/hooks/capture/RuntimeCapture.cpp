@@ -683,6 +683,10 @@ namespace {
                     return EXCEPTION_CONTINUE_SEARCH;
                 }
 
+                if (g_pidTransferCheckJumpTarget == 0 || g_pidTransferCheckFallthroughTarget == 0) {
+                    return EXCEPTION_CONTINUE_SEARCH;
+                }
+
                 uint64_t newGameId = 0;
                 SafeReadUint64(reinterpret_cast<const void*>(ctx->Rdi), newGameId);
                 AppId_t newAppId = static_cast<AppId_t>(newGameId & 0xFFFFFF);
@@ -690,16 +694,8 @@ namespace {
                 AppId_t oldAppId = static_cast<AppId_t>(oldGameId & 0xFFFFFF);
                 uint32_t pid = static_cast<uint32_t>(ctx->R15);
 
-                int32_t disp = *reinterpret_cast<const int32_t*>(g_pidTransferCheckOriginalBytes + 2);
-                uint64_t jumpTarget = reinterpret_cast<uint64_t>(g_pidTransferCheckTarget + 6 + disp);
-                uint64_t fallthroughTarget = reinterpret_cast<uint64_t>(g_pidTransferCheckTarget + 6);
-
-                // Ensure computed targets match pre-validated initialization targets
-                if (g_pidTransferCheckJumpTarget != 0 && jumpTarget != g_pidTransferCheckJumpTarget) {
-                    LOG_MISC_ERROR("PidTransferCheck: jump target integrity check failed (expected 0x{:X}, got 0x{:X})",
-                                   g_pidTransferCheckJumpTarget, jumpTarget);
-                    return EXCEPTION_CONTINUE_SEARCH;
-                }
+                uint64_t jumpTarget = g_pidTransferCheckJumpTarget;
+                uint64_t fallthroughTarget = g_pidTransferCheckFallthroughTarget;
 
                 if (!oldAppId && pid) {
                     oldAppId = SteamCapture::GetOnlineFixAppForPid(pid);
