@@ -11,7 +11,9 @@
 #include <windows.h>
 #include <atomic>
 #include <chrono>
+#include <cinttypes>
 #include <condition_variable>
+#include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -59,23 +61,175 @@ namespace {
     CR_GetAchievements_t    g_getAchievements    = nullptr;
     CR_InstallVtableHooks_t g_installVtableHooks = nullptr;
 
-    // Structured exception handling isolation wrappers for third-party functions
-    static DWORD LogException(const char* fnName, LPEXCEPTION_POINTERS ep) {
-        if (ep && ep->ExceptionRecord) {
-            LOG_WARN("CloudRedirect: exception in {} (code=0x{:08X}, addr=0x{:X})",
-                     fnName,
-                     ep->ExceptionRecord->ExceptionCode,
-                     reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress));
-        } else {
-            LOG_WARN("CloudRedirect: exception in {}", fnName);
+    std::atomic<uint32_t>   g_consecutiveExceptions{0};
+    constexpr uint32_t      kMaxConsecutiveExceptions = 3;
+
+    // Structured exception handling isolation and diagnostics for third-party functions
+    static const char* ExceptionCodeToString(DWORD code) {
+        switch (code) {
+            case EXCEPTION_ACCESS_VIOLATION:         return "EXCEPTION_ACCESS_VIOLATION";
+            case EXCEPTION_DATATYPE_MISALIGNMENT:    return "EXCEPTION_DATATYPE_MISALIGNMENT";
+            case EXCEPTION_BREAKPOINT:               return "EXCEPTION_BREAKPOINT";
+            case EXCEPTION_SINGLE_STEP:              return "EXCEPTION_SINGLE_STEP";
+            case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:    return "EXCEPTION_ARRAY_BOUNDS_EXCEEDED";
+            case EXCEPTION_FLT_DENORMAL_OPERAND:     return "EXCEPTION_FLT_DENORMAL_OPERAND";
+            case EXCEPTION_FLT_DIVIDE_BY_ZERO:       return "EXCEPTION_FLT_DIVIDE_BY_ZERO";
+            case EXCEPTION_FLT_INEXACT_RESULT:       return "EXCEPTION_FLT_INEXACT_RESULT";
+            case EXCEPTION_FLT_INVALID_OPERATION:    return "EXCEPTION_FLT_INVALID_OPERATION";
+            case EXCEPTION_FLT_OVERFLOW:             return "EXCEPTION_FLT_OVERFLOW";
+            case EXCEPTION_FLT_STACK_CHECK:          return "EXCEPTION_FLT_STACK_CHECK";
+            case EXCEPTION_FLT_UNDERFLOW:            return "EXCEPTION_FLT_UNDERFLOW";
+            case EXCEPTION_INT_DIVIDE_BY_ZERO:       return "EXCEPTION_INT_DIVIDE_BY_ZERO";
+            case EXCEPTION_INT_OVERFLOW:             return "EXCEPTION_INT_OVERFLOW";
+            case EXCEPTION_PRIV_INSTRUCTION:         return "EXCEPTION_PRIV_INSTRUCTION";
+            case EXCEPTION_IN_PAGE_ERROR:            return "EXCEPTION_IN_PAGE_ERROR";
+            case EXCEPTION_ILLEGAL_INSTRUCTION:      return "EXCEPTION_ILLEGAL_INSTRUCTION";
+            case EXCEPTION_NONCONTINUABLE_EXCEPTION: return "EXCEPTION_NONCONTINUABLE_EXCEPTION";
+            case EXCEPTION_STACK_OVERFLOW:           return "EXCEPTION_STACK_OVERFLOW";
+            case EXCEPTION_INVALID_DISPOSITION:      return "EXCEPTION_INVALID_DISPOSITION";
+            case EXCEPTION_GUARD_PAGE:               return "EXCEPTION_GUARD_PAGE";
+            case 0xC0000374:                         return "STATUS_HEAP_CORRUPTION";
+            case 0xC0000409:                         return "STATUS_STACK_BUFFER_OVERRUN";
+            default:                                 return "UNKNOWN_EXCEPTION";
         }
+    }
+
+    struct ModuleInfo {
+        std::string name = "unknown";
+        uintptr_t   base = 0;
+        uintptr_t   offset = 0;
+    };
+
+    static ModuleInfo ResolveModuleInfo(const void* addr) {
+        ModuleInfo info;
+        if (!addr) return info;
+
+        HMODULE hMod = nullptr;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCWSTR>(addr), &hMod) && hMod) {
+            info.base = reinterpret_cast<uintptr_t>(hMod);
+            info.offset = reinterpret_cast<uintptr_t>(addr) - info.base;
+            wchar_t path[MAX_PATH] = {};
+            if (GetModuleFileNameW(hMod, path, static_cast<DWORD>(std::size(path)))) {
+                info.name = std::filesystem::path(path).filename().string();
+            }
+        }
+        return info;
+    }
+
+    static void TripCircuitBreaker(const char* reason) {
+        if (g_active.exchange(false, std::memory_order_acq_rel)) {
+            LOG_ERROR("CloudRedirect: CIRCUIT BREAKER TRIPPED ({}) - third-party cloud redirection disabled to protect process stability",
+                      reason);
+            char dbgMsg[256];
+            std::snprintf(dbgMsg, sizeof(dbgMsg),
+                          "[CloudRedirect] CIRCUIT BREAKER TRIPPED (%s) - cloud redirection disabled\n", reason);
+            OutputDebugStringA(dbgMsg);
+        }
+    }
+
+    static DWORD FilterException(const char* fnName, LPEXCEPTION_POINTERS ep) {
+        if (!ep || !ep->ExceptionRecord) {
+            LOG_WARN("CloudRedirect: exception in {} with null exception record", fnName);
+            return EXCEPTION_EXECUTE_HANDLER;
+        }
+
+        const EXCEPTION_RECORD* rec = ep->ExceptionRecord;
+        const PCONTEXT ctx = ep->ContextRecord;
+        DWORD code = rec->ExceptionCode;
+        const char* codeStr = ExceptionCodeToString(code);
+        ModuleInfo faultMod = ResolveModuleInfo(rec->ExceptionAddress);
+
+        // Classify exception severity
+        bool isNonContinuable = (rec->ExceptionFlags & EXCEPTION_NONCONTINUABLE) != 0;
+        bool isHeapCorruption = (code == 0xC0000374); // STATUS_HEAP_CORRUPTION
+        bool isStackCorruption = (code == 0xC0000409) || (code == EXCEPTION_STACK_OVERFLOW);
+        bool isGuardPage = (code == EXCEPTION_GUARD_PAGE);
+        bool isDepViolation = (code == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 1 && rec->ExceptionInformation[0] == 8);
+        bool isFatal = isNonContinuable || isHeapCorruption || isStackCorruption || isGuardPage || isDepViolation;
+
+        // Log rich diagnostic report
+        if (code == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
+            const char* op = "accessing";
+            switch (rec->ExceptionInformation[0]) {
+                case 0: op = "reading from"; break;
+                case 1: op = "writing to"; break;
+                case 8: op = "executing DEP address"; break;
+            }
+            uintptr_t targetAddr = rec->ExceptionInformation[1];
+            LOG_ERROR("CloudRedirect: EXCEPTION in {}! Code: {} (0x{:08X}) attempting {} 0x{:X} at {}+0x{:X} (addr=0x{:X}, flags=0x{:X})",
+                      fnName, codeStr, code, op, targetAddr, faultMod.name, faultMod.offset,
+                      reinterpret_cast<uintptr_t>(rec->ExceptionAddress), rec->ExceptionFlags);
+
+            char dbgMsg[512];
+            std::snprintf(dbgMsg, sizeof(dbgMsg),
+                          "[CloudRedirect] EXCEPTION in %s! %s (0x%08X) %s 0x%llX at %s+0x%llX (addr=0x%llX)\n",
+                          fnName, codeStr, code, op, static_cast<unsigned long long>(targetAddr),
+                          faultMod.name.c_str(), static_cast<unsigned long long>(faultMod.offset),
+                          reinterpret_cast<unsigned long long>(rec->ExceptionAddress));
+            OutputDebugStringA(dbgMsg);
+        } else {
+            LOG_ERROR("CloudRedirect: EXCEPTION in {}! Code: {} (0x{:08X}) at {}+0x{:X} (addr=0x{:X}, flags=0x{:X})",
+                      fnName, codeStr, code, faultMod.name, faultMod.offset,
+                      reinterpret_cast<uintptr_t>(rec->ExceptionAddress), rec->ExceptionFlags);
+
+            char dbgMsg[512];
+            std::snprintf(dbgMsg, sizeof(dbgMsg),
+                          "[CloudRedirect] EXCEPTION in %s! %s (0x%08X) at %s+0x%llX (addr=0x%llX, flags=0x%X)\n",
+                          fnName, codeStr, code, faultMod.name.c_str(),
+                          static_cast<unsigned long long>(faultMod.offset),
+                          reinterpret_cast<unsigned long long>(rec->ExceptionAddress), rec->ExceptionFlags);
+            OutputDebugStringA(dbgMsg);
+        }
+
+        if (ctx) {
+#if defined(_M_X64) || defined(__x86_64__)
+            LOG_ERROR("CloudRedirect Context: RIP=0x{:X} RSP=0x{:X} RBP=0x{:X} RAX=0x{:X} RBX=0x{:X} RCX=0x{:X} RDX=0x{:X}",
+                      ctx->Rip, ctx->Rsp, ctx->Rbp, ctx->Rax, ctx->Rbx, ctx->Rcx, ctx->Rdx);
+            LOG_ERROR("CloudRedirect Context: R8=0x{:X} R9=0x{:X} R10=0x{:X} R11=0x{:X} R12=0x{:X} R13=0x{:X} R14=0x{:X} R15=0x{:X} EFLAGS=0x{:08X}",
+                      ctx->R8, ctx->R9, ctx->R10, ctx->R11, ctx->R12, ctx->R13, ctx->R14, ctx->R15, ctx->EFlags);
+            char regMsg[512];
+            std::snprintf(regMsg, sizeof(regMsg),
+                          "[CloudRedirect] RIP=0x%llX RSP=0x%llX RBP=0x%llX RAX=0x%llX RCX=0x%llX RDX=0x%llX\n",
+                          ctx->Rip, ctx->Rsp, ctx->Rbp, ctx->Rax, ctx->Rcx, ctx->Rdx);
+            OutputDebugStringA(regMsg);
+#elif defined(_M_IX86) || defined(__i386__)
+            LOG_ERROR("CloudRedirect Context: EIP=0x{:X} ESP=0x{:X} EBP=0x{:X} EAX=0x{:X} EBX=0x{:X} ECX=0x{:X} EDX=0x{:X} EFLAGS=0x{:08X}",
+                      ctx->Eip, ctx->Esp, ctx->Ebp, ctx->Eax, ctx->Ebx, ctx->Ecx, ctx->Edx, ctx->EFlags);
+#endif
+        }
+
+        // Fatal heap/stack corruption or DEP violation must NEVER be swallowed.
+        // Continuing execution in a corrupted heap or stack is an exploitable security vulnerability.
+        // Return EXCEPTION_CONTINUE_SEARCH so the system crash handler or debugger captures the dump.
+        if (isFatal) {
+            TripCircuitBreaker(isDepViolation ? "DEP execution violation" : "fatal memory/stack corruption or non-continuable exception");
+            LOG_ERROR("CloudRedirect: fatal memory corruption cannot be safely recovered; propagating exception to crash handler");
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+
+        // Warn if the fault originated outside cloud_redirect.dll
+        if (faultMod.base != reinterpret_cast<uintptr_t>(g_module)) {
+            LOG_WARN("CloudRedirect: exception occurred in external module {} (base 0x{:X}), not inside cloud_redirect.dll",
+                     faultMod.name, faultMod.base);
+        }
+
+        // For catchable faults (e.g. null pointer read in third-party DLL):
+        // Track consecutive failures and trip circuit breaker if threshold is exceeded.
+        uint32_t count = g_consecutiveExceptions.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count >= kMaxConsecutiveExceptions) {
+            TripCircuitBreaker("repeated consecutive exceptions");
+        }
+
         return EXCEPTION_EXECUTE_HANDLER;
     }
 
     static bool SafeInvokeInit(CR_InitCloudSave_t fn, const char* path, CR_NotifyFn notify) {
         __try {
-            return fn ? fn(path, notify) : false;
-        } __except (LogException("CR_InitCloudSave", GetExceptionInformation())) {
+            bool ok = fn ? fn(path, notify) : false;
+            if (ok) g_consecutiveExceptions.store(0, std::memory_order_relaxed);
+            return ok;
+        } __except (FilterException("CR_InitCloudSave", GetExceptionInformation())) {
             return false;
         }
     }
@@ -85,59 +239,81 @@ namespace {
                                     uint8_t* respBuf, uint32_t respMaxLen,
                                     uint32_t* respLen, int32_t* eresult) {
         __try {
-            return fn ? fn(method, appId, accountId, reqBody, reqLen, respBuf, respMaxLen, respLen, eresult) : false;
-        } __except (LogException("CR_HandleCloudRpc", GetExceptionInformation())) {
+            bool ok = fn ? fn(method, appId, accountId, reqBody, reqLen, respBuf, respMaxLen, respLen, eresult) : false;
+            if (ok) g_consecutiveExceptions.store(0, std::memory_order_relaxed);
+            return ok;
+        } __except (FilterException("CR_HandleCloudRpc", GetExceptionInformation())) {
             return false;
         }
     }
 
     static void SafeInvokeSetApps(CR_SetApps_t fn, const uint32_t* appIds, uint32_t count) {
         __try {
-            if (fn) fn(appIds, count);
-        } __except (LogException("CR_SetApps", GetExceptionInformation())) {
+            if (fn) {
+                fn(appIds, count);
+                g_consecutiveExceptions.store(0, std::memory_order_relaxed);
+            }
+        } __except (FilterException("CR_SetApps", GetExceptionInformation())) {
         }
     }
 
     static bool SafeInvokeIsApp(CR_IsApp_t fn, uint32_t appId) {
         __try {
-            return fn ? fn(appId) : false;
-        } __except (LogException("CR_IsApp", GetExceptionInformation())) {
+            bool res = fn ? fn(appId) : false;
+            g_consecutiveExceptions.store(0, std::memory_order_relaxed);
+            return res;
+        } __except (FilterException("CR_IsApp", GetExceptionInformation())) {
             return false;
         }
     }
 
     static void SafeInvokeShutdown(CR_Shutdown_t fn) {
         __try {
-            if (fn) fn();
-        } __except (LogException("CR_Shutdown", GetExceptionInformation())) {
+            if (fn) {
+                fn();
+                g_consecutiveExceptions.store(0, std::memory_order_relaxed);
+            }
+        } __except (FilterException("CR_Shutdown", GetExceptionInformation())) {
         }
     }
 
     static void SafeInvokeEnableStatsSync(CR_EnableStatsSync_t fn, bool a, bool b) {
         __try {
-            if (fn) fn(a, b);
-        } __except (LogException("CR_EnableStatsSync", GetExceptionInformation())) {
+            if (fn) {
+                fn(a, b);
+                g_consecutiveExceptions.store(0, std::memory_order_relaxed);
+            }
+        } __except (FilterException("CR_EnableStatsSync", GetExceptionInformation())) {
         }
     }
 
     static void SafeInvokeSetAccountId(CR_SetAccountId_t fn, uint32_t accountId) {
         __try {
-            if (fn) fn(accountId);
-        } __except (LogException("CR_SetAccountId", GetExceptionInformation())) {
+            if (fn) {
+                fn(accountId);
+                g_consecutiveExceptions.store(0, std::memory_order_relaxed);
+            }
+        } __except (FilterException("CR_SetAccountId", GetExceptionInformation())) {
         }
     }
 
     static void SafeInvokeNotifyAppRunning(CR_NotifyAppRunning_t fn, uint32_t appId, bool running) {
         __try {
-            if (fn) fn(appId, running);
-        } __except (LogException("CR_NotifyAppRunning", GetExceptionInformation())) {
+            if (fn) {
+                fn(appId, running);
+                g_consecutiveExceptions.store(0, std::memory_order_relaxed);
+            }
+        } __except (FilterException("CR_NotifyAppRunning", GetExceptionInformation())) {
         }
     }
 
     static void SafeInvokeNotifyStatsStored(CR_NotifyStatsStored_t fn, uint32_t appId) {
         __try {
-            if (fn) fn(appId);
-        } __except (LogException("CR_NotifyStatsStored", GetExceptionInformation())) {
+            if (fn) {
+                fn(appId);
+                g_consecutiveExceptions.store(0, std::memory_order_relaxed);
+            }
+        } __except (FilterException("CR_NotifyStatsStored", GetExceptionInformation())) {
         }
     }
 
@@ -145,16 +321,20 @@ namespace {
                                               CloudRedirectHost::AchievementBlock* out,
                                               uint32_t maxBlocks) {
         __try {
-            return fn ? fn(appId, out, maxBlocks) : 0;
-        } __except (LogException("CR_GetAchievements", GetExceptionInformation())) {
+            uint32_t res = fn ? fn(appId, out, maxBlocks) : 0;
+            g_consecutiveExceptions.store(0, std::memory_order_relaxed);
+            return res;
+        } __except (FilterException("CR_GetAchievements", GetExceptionInformation())) {
             return 0;
         }
     }
 
     static bool SafeInvokeInstallVtableHooks(CR_InstallVtableHooks_t fn) {
         __try {
-            return fn ? fn() : false;
-        } __except (LogException("CR_InstallVtableHooks", GetExceptionInformation())) {
+            bool ok = fn ? fn() : false;
+            if (ok) g_consecutiveExceptions.store(0, std::memory_order_relaxed);
+            return ok;
+        } __except (FilterException("CR_InstallVtableHooks", GetExceptionInformation())) {
             return false;
         }
     }
@@ -357,6 +537,7 @@ namespace CloudRedirectHost {
 
         std::lock_guard<std::mutex> lock(g_mutex);
         if (g_active.load(std::memory_order_acquire)) return;
+        g_consecutiveExceptions.store(0, std::memory_order_relaxed);
 
         const std::filesystem::path libPath = ResolveLibraryPath(steamInstallPath, Settings::cloudLibrary);
         std::error_code ec;
@@ -520,6 +701,7 @@ namespace CloudRedirectHost {
     void Shutdown() {
         std::lock_guard<std::mutex> lock(g_mutex);
         if (!g_active.exchange(false, std::memory_order_acq_rel)) return;
+        g_consecutiveExceptions.store(0, std::memory_order_relaxed);
 
         // Drain in-flight calls using condition variable with a safety timeout
         bool drained = false;
