@@ -1,4 +1,4 @@
-# lumacore.toml - LumaCore configuration
+# lumacore.toml - BetterLumaCore configuration
 # Place this file in your Steam installation directory (next to steam.exe).
 # Rename to lumacore.toml to activate. All sections are optional - missing
 # keys fall back to the defaults shown below.

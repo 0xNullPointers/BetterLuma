@@ -1,14 +1,19 @@
 # Credits
 
+## BetterLumaCore
+
+BetterLumaCore represents the continued development and feature enhancement of the LumaCore project, focused on continuing development and introducing features long desired for the platform.
+
+The original work is done by Midrags, and the copyright of all the files is hence held by them.
+All subsequent modifications, architectural enhancements, and continued development are done by 0xBadCod3.
+
 ## LumaCore
 
-LumaCore was written by Midrag for the SteaMidra project.
+LumaCore was originally written by Midrag for the SteaMidra project. The original work is done by Midrags, and the copyright of all the files is hence held by them.
 
 ### Acknowledgements
 
-**OpenSteamTool** (https://github.com/OpenSteam001/OpenSteamTool) - GPL-3.0 license - was an
-early inspiration and reference for LumaCore. The current code has since been rewritten and
-extended with significant new work by Midrag.
+**OpenSteamTool** (https://github.com/OpenSteam001/OpenSteamTool) - GPL-3.0 license - was an early inspiration and reference for LumaCore. The codebase has since been substantially rewritten, modernized, and extended with significant new architectural work.
 
 ### Third-party libraries
 
