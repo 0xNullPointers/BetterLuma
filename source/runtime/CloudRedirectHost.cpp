@@ -56,10 +56,22 @@ namespace {
     CR_InstallVtableHooks_t g_installVtableHooks = nullptr;
 
     // Structured exception handling isolation wrappers for third-party functions
+    static DWORD LogException(const char* fnName, LPEXCEPTION_POINTERS ep) {
+        if (ep && ep->ExceptionRecord) {
+            LOG_WARN("CloudRedirect: exception in {} (code=0x{:08X}, addr=0x{:X})",
+                     fnName,
+                     ep->ExceptionRecord->ExceptionCode,
+                     reinterpret_cast<uintptr_t>(ep->ExceptionRecord->ExceptionAddress));
+        } else {
+            LOG_WARN("CloudRedirect: exception in {}", fnName);
+        }
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
+
     static bool SafeInvokeInit(CR_InitCloudSave_t fn, const char* path, CR_NotifyFn notify) {
         __try {
             return fn ? fn(path, notify) : false;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } __except (LogException("CR_InitCloudSave", GetExceptionInformation())) {
             return false;
         }
     }
@@ -70,7 +82,7 @@ namespace {
                                     uint32_t* respLen, int32_t* eresult) {
         __try {
             return fn ? fn(method, appId, accountId, reqBody, reqLen, respBuf, respMaxLen, respLen, eresult) : false;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } __except (LogException("CR_HandleCloudRpc", GetExceptionInformation())) {
             return false;
         }
     }
@@ -78,14 +90,14 @@ namespace {
     static void SafeInvokeSetApps(CR_SetApps_t fn, const uint32_t* appIds, uint32_t count) {
         __try {
             if (fn) fn(appIds, count);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } __except (LogException("CR_SetApps", GetExceptionInformation())) {
         }
     }
 
     static bool SafeInvokeIsApp(CR_IsApp_t fn, uint32_t appId) {
         __try {
             return fn ? fn(appId) : false;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } __except (LogException("CR_IsApp", GetExceptionInformation())) {
             return false;
         }
     }
@@ -93,35 +105,35 @@ namespace {
     static void SafeInvokeShutdown(CR_Shutdown_t fn) {
         __try {
             if (fn) fn();
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } __except (LogException("CR_Shutdown", GetExceptionInformation())) {
         }
     }
 
     static void SafeInvokeEnableStatsSync(CR_EnableStatsSync_t fn, bool a, bool b) {
         __try {
             if (fn) fn(a, b);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } __except (LogException("CR_EnableStatsSync", GetExceptionInformation())) {
         }
     }
 
     static void SafeInvokeSetAccountId(CR_SetAccountId_t fn, uint32_t accountId) {
         __try {
             if (fn) fn(accountId);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } __except (LogException("CR_SetAccountId", GetExceptionInformation())) {
         }
     }
 
     static void SafeInvokeNotifyAppRunning(CR_NotifyAppRunning_t fn, uint32_t appId, bool running) {
         __try {
             if (fn) fn(appId, running);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } __except (LogException("CR_NotifyAppRunning", GetExceptionInformation())) {
         }
     }
 
     static void SafeInvokeNotifyStatsStored(CR_NotifyStatsStored_t fn, uint32_t appId) {
         __try {
             if (fn) fn(appId);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } __except (LogException("CR_NotifyStatsStored", GetExceptionInformation())) {
         }
     }
 
@@ -130,7 +142,7 @@ namespace {
                                               uint32_t maxBlocks) {
         __try {
             return fn ? fn(appId, out, maxBlocks) : 0;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } __except (LogException("CR_GetAchievements", GetExceptionInformation())) {
             return 0;
         }
     }
@@ -138,7 +150,7 @@ namespace {
     static bool SafeInvokeInstallVtableHooks(CR_InstallVtableHooks_t fn) {
         __try {
             return fn ? fn() : false;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        } __except (LogException("CR_InstallVtableHooks", GetExceptionInformation())) {
             return false;
         }
     }
@@ -197,10 +209,12 @@ namespace {
         }
 
         for (char& c : safeTitle) {
-            if (static_cast<unsigned char>(c) < 0x20 && c != '\t') c = ' ';
+            unsigned char uc = static_cast<unsigned char>(c);
+            if ((uc < 0x20 || uc >= 0x7F) && c != '\t') c = ' ';
         }
         for (char& c : safeMessage) {
-            if (static_cast<unsigned char>(c) < 0x20 && c != '\t' && c != '\n') c = ' ';
+            unsigned char uc = static_cast<unsigned char>(c);
+            if ((uc < 0x20 || uc >= 0x7F) && c != '\t' && c != '\n') c = ' ';
         }
 
         switch (level) {
