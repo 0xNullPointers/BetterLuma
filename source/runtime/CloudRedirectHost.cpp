@@ -163,15 +163,13 @@ namespace {
         bool valid = false;
 
         explicit InFlightGuard(std::atomic<int32_t>& c) : counter(c) {
-            if (!g_active.load(std::memory_order_acquire))
-                return;
-
             counter.fetch_add(1, std::memory_order_acq_rel);
 
-            if (g_active.load(std::memory_order_acquire) && g_module) {
+            HMODULE currentMod = g_module;
+            if (g_active.load(std::memory_order_acquire) && currentMod) {
                 HMODULE mod = nullptr;
                 if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-                                       reinterpret_cast<LPCWSTR>(g_module), &mod)) {
+                                       reinterpret_cast<LPCWSTR>(currentMod), &mod)) {
                     hModule = mod;
                     valid = true;
                 }
