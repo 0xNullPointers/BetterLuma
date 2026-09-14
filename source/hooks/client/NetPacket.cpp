@@ -22,6 +22,7 @@
 #include "hooks/capture/SteamCapture.h"
 #include "runtime/LcFnvHash.h"
 #include "hooks/Macros.h"
+#include <vector>
 
 #include <unordered_map>
 #include <mutex>
@@ -209,6 +210,7 @@ LM_HOOK(BBuildAndAsyncSendFrame, bool,
     if (eWebSocketOpCode != k_eWebSocketOpCode_Binary)
         return oBBuildAndAsyncSendFrame(pObject, eWebSocketOpCode, pubData, cubData);
 
+    std::vector<uint8_t> patchedBuf;
     uint8_t* sendBuf = pubData;
     uint32_t sendSize = cubData;
 
@@ -223,10 +225,16 @@ LM_HOOK(BBuildAndAsyncSendFrame, bool,
                 return true;
             }
             if (NetPacket::s_tx.PatchBody) {
-                sendBuf = NetPacket::s_tx.Build(pubData, cbHdr, pHdr,
-                                                NetPacket::s_tx.Body, NetPacket::s_tx.BodyLen,
-                                                &sendSize);
-                if (!sendBuf) {
+                uint8_t* poolBuf = NetPacket::s_tx.Build(pubData, cbHdr, pHdr,
+                                                         NetPacket::s_tx.Body, NetPacket::s_tx.BodyLen,
+                                                         &sendSize);
+                if (poolBuf && sendSize > 0) {
+                    // Copy into thread-private buffer before releasing s_txLock.
+                    // This eliminates ring-buffer wrap races and TOCTOU use-after-free
+                    // while oBBuildAndAsyncSendFrame is actively consuming the frame.
+                    patchedBuf.assign(poolBuf, poolBuf + sendSize);
+                    sendBuf = patchedBuf.data();
+                } else {
                     sendBuf = pubData;
                     sendSize = cubData;
                 }
@@ -245,6 +253,11 @@ LM_HOOK(RecvPkt, void*, void* pThis, CNetPacket* pPacket)
             return oRecvPkt(pT, pP) != nullptr;
         });
 
+    std::vector<uint8_t> patchedRxBuf;
+    uint8_t* origData = pPacket ? pPacket->m_pubData : nullptr;
+    uint32_t origSize = pPacket ? pPacket->m_cubData : 0;
+    bool wasPatched = false;
+
     if (pPacket && pPacket->m_pubData && pPacket->m_cubData >= sizeof(MsgHdr)) {
         std::lock_guard<std::mutex> lock(s_rxLock);
         EMsg eMsg;
@@ -255,23 +268,40 @@ LM_HOOK(RecvPkt, void*, void* pThis, CNetPacket* pPacket)
             NetPacket::s_rx.Shrunk = false;
             RouteInboundDispatch(eMsg, pBody, cbBody, pHdr, cbHdr);
 
+            uint8_t* poolBuf = nullptr;
             if (NetPacket::s_rx.Shrunk && NetPacket::s_rx.PatchHdr) {
-                NetPacket::s_rx.Replace(pPacket,
+                poolBuf = NetPacket::s_rx.Replace(pPacket,
                     NetPacket::s_rx.Hdr, NetPacket::s_rx.HdrLen,
                     pBody, NetPacket::s_rx.NewBodySize);
             } else if (NetPacket::s_rx.Shrunk) {
                 pPacket->m_cubData = sizeof(MsgHdr) + cbHdr + NetPacket::s_rx.NewBodySize;
             } else if (NetPacket::s_rx.PatchHdr || NetPacket::s_rx.PatchBody) {
-                NetPacket::s_rx.Replace(pPacket,
+                poolBuf = NetPacket::s_rx.Replace(pPacket,
                     NetPacket::s_rx.PatchHdr  ? NetPacket::s_rx.Hdr  : pHdr,
                     NetPacket::s_rx.PatchHdr  ? NetPacket::s_rx.HdrLen : cbHdr,
                     NetPacket::s_rx.PatchBody ? NetPacket::s_rx.Body : pBody,
                     NetPacket::s_rx.PatchBody ? NetPacket::s_rx.BodyLen : cbBody);
             }
+
+            if (poolBuf && pPacket->m_cubData > 0) {
+                // Copy into thread-private buffer before releasing s_rxLock.
+                // This guarantees the payload remains immutable on this thread's call stack
+                // even if concurrent incoming packets wrap around the shared pool slots.
+                patchedRxBuf.assign(poolBuf, poolBuf + pPacket->m_cubData);
+                pPacket->m_pubData = patchedRxBuf.data();
+                wasPatched = true;
+            }
         }
     }
 
-    return oRecvPkt(pThis, pPacket);
+    void* ret = oRecvPkt(pThis, pPacket);
+
+    // Restore original packet pointers after synchronous consumption by Steam dispatcher
+    if (pPacket && wasPatched) {
+        pPacket->m_pubData = origData;
+        pPacket->m_cubData = origSize;
+    }
+    return ret;
 }
 
 // ── PacketPool method implementations ────────
