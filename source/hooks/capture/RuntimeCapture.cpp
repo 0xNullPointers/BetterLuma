@@ -488,26 +488,7 @@ namespace {
     // ── VEH handler ──────────────────────────────────────────────────────────
     // Scoped to this module's int3 sites only. Foreign RIP ->
     // EXCEPTION_CONTINUE_SEARCH so other VEH handlers still get their turn.
-    thread_local bool g_inVeh = false;
-
-    LONG CALLBACK VehHandler(PEXCEPTION_POINTERS pExInfo) {
-        if (!g_vehActive.load(std::memory_order_acquire)) return EXCEPTION_CONTINUE_SEARCH;
-        if (g_inVeh) return EXCEPTION_CONTINUE_SEARCH;
-
-        g_vehInFlight.fetch_add(1, std::memory_order_acq_rel);
-        if (!g_vehActive.load(std::memory_order_acquire)) {
-            g_vehInFlight.fetch_sub(1, std::memory_order_acq_rel);
-            return EXCEPTION_CONTINUE_SEARCH;
-        }
-
-        struct VehGuard {
-            VehGuard()  { g_inVeh = true; }
-            ~VehGuard() {
-                g_inVeh = false;
-                g_vehInFlight.fetch_sub(1, std::memory_order_acq_rel);
-            }
-        } guard;
-
+    static LONG VehHandlerInternal(PEXCEPTION_POINTERS pExInfo) {
         PCONTEXT ctx = pExInfo->ContextRecord;
 
         if (pExInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT) {
@@ -736,6 +717,30 @@ namespace {
         }
 
         return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    thread_local bool g_inVeh = false;
+
+    LONG CALLBACK VehHandler(PEXCEPTION_POINTERS pExInfo) {
+        if (!g_vehActive.load(std::memory_order_acquire)) return EXCEPTION_CONTINUE_SEARCH;
+        if (g_inVeh) return EXCEPTION_CONTINUE_SEARCH;
+
+        g_vehInFlight.fetch_add(1, std::memory_order_acq_rel);
+        if (!g_vehActive.load(std::memory_order_acquire)) {
+            g_vehInFlight.fetch_sub(1, std::memory_order_acq_rel);
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+
+        g_inVeh = true;
+        LONG result = EXCEPTION_CONTINUE_SEARCH;
+        __try {
+            result = VehHandlerInternal(pExInfo);
+        }
+        __finally {
+            g_inVeh = false;
+            g_vehInFlight.fetch_sub(1, std::memory_order_acq_rel);
+        }
+        return result;
     }
 }
 
