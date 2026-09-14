@@ -71,6 +71,7 @@ add_library(LumaCore SHARED
     runtime/ProcessInspect.cpp
     runtime/IntegrityScanner.cpp
     runtime/LibraryInjector.cpp
+    runtime/CloudRedirectHost.cpp
 
     patterns/ByteScan.cpp
     patterns/PatternSig.cpp
@@ -95,6 +96,7 @@ add_library(LumaCore SHARED
     hooks/client/NetPacket_FamilySharing.cpp
     hooks/client/NetPacket_OnlineFix.cpp
     hooks/client/NetPacket_SteamStub.cpp
+    hooks/client/NetPacket_Cloud.cpp
     hooks/client/PackagePatch.cpp
     hooks/client/RichPresence.cpp
     hooks/client/LicenseHooks.cpp

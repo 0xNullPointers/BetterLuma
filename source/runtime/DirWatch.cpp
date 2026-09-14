@@ -7,6 +7,7 @@
 #include "DirWatch.h"
 #include "config/LuaLoader.h"
 #include "hooks/capture/SteamCapture.h"
+#include "runtime/CloudRedirectHost.h"
 #include "Logger.h"
 #include <atomic>
 #include <filesystem>
@@ -299,6 +300,8 @@ namespace DirWatch {
                     }
                 }
                 SteamCapture::NotifyLicenseChanged();
+                // Synchronize unlocked apps with CloudRedirect if active
+                CloudRedirectHost::SyncAppSet();
                 LOG_PKGCH_INFO("DirWatch: refresh completed");
             }
         }

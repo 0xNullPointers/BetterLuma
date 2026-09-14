@@ -12,7 +12,9 @@
 #include "hooks/client/NetPacket_OnlineFix.h"
 #include "hooks/client/NetPacket_SteamStub.h"
 #include "hooks/client/RichPresence.h"
+#include "hooks/client/NetPacket_Cloud.h"
 #include "hooks/client/PacketRouter.h"
+#include "runtime/CloudRedirectHost.h"
 #include "runtime/Logger.h"
 #include "config/LuaLoader.h"
 #include "runtime/Ticket.h"
@@ -84,11 +86,22 @@ static bool RouteTxService(const char* targetJobName,
 static void RouteOutboundDispatch(EMsg eMsg, const uint8_t* pBody, uint32_t cbBody,
                                   const uint8_t* pHdr, uint32_t cbHdr) {
     NetPacket::s_tx.PatchBody = false;
+    NetPacket::s_tx.SuppressSend = false;
     switch (eMsg) {
     case k_EMsgServiceMethodCallFromClient: {
         CMsgProtoBufHeader hdr;
         if (hdr.ParseFromArray(pHdr, cbHdr) && hdr.has_target_job_name()) {
-            NetPacket::s_tx.PatchBody = RouteTxService(hdr.target_job_name().c_str(), pBody, cbBody, pHdr, cbHdr);
+            const char* jobName = hdr.target_job_name().c_str();
+            if (std::strncmp(jobName, "Cloud.", 6) == 0) {
+                if (std::strcmp(jobName, "Cloud.SignalAppExitSyncDone#1") != 0 &&
+                    std::strcmp(jobName, "Cloud.ClientConflictResolution#1") != 0) {
+                    if (NetPacket::Handlers::Cloud::HandleSend(jobName, pBody, cbBody, pHdr, cbHdr)) {
+                        NetPacket::s_tx.SuppressSend = true;
+                        return;
+                    }
+                }
+            }
+            NetPacket::s_tx.PatchBody = RouteTxService(jobName, pBody, cbBody, pHdr, cbHdr);
         }
         return;
     }
@@ -110,6 +123,11 @@ static void RouteOutboundDispatch(EMsg eMsg, const uint8_t* pBody, uint32_t cbBo
         return;
     case k_EMsgClientStoreUserStats2:
         NetPacket::s_tx.PatchBody = NetPacket::Handlers::UserStats::HandleSend_ClientStoreUserStats2(pBody, cbBody);
+        {
+            AppId_t appId = RichPresence::GetPlayingApp();
+            if (appId != 0)
+                CloudRedirectHost::NotifyStatsStored(appId);
+        }
         return;
     case k_EMsgClientGetAppOwnershipTicket:
         return;
@@ -192,6 +210,8 @@ LM_HOOK(BBuildAndAsyncSendFrame, bool,
     uint32_t cbHdr, cbBody;
     if (ParsePacket(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) {
         RouteOutboundDispatch(eMsg, pBody, cbBody, pHdr, cbHdr);
+        // Suppress sending frame to Valve network if handled locally by CloudRedirect
+        if (NetPacket::s_tx.SuppressSend) return true;
         if (NetPacket::s_tx.PatchBody) {
             uint32_t newSize = 0;
             uint8_t* buf = NetPacket::s_tx.Build(pubData, cbHdr, pHdr,
@@ -207,6 +227,13 @@ LM_HOOK(BBuildAndAsyncSendFrame, bool,
 LM_HOOK(RecvPkt, void*, void* pThis, CNetPacket* pPacket)
 {
     RichPresence::DeliverPending(
+        pThis, pPacket,
+        [](void* pT, CNetPacket* pP) -> bool {
+            return oRecvPkt(pT, pP) != nullptr;
+        });
+
+    // Drain queued CloudRedirect responses before processing inbound packet
+    NetPacket::Handlers::Cloud::Drain(
         pThis, pPacket,
         [](void* pT, CNetPacket* pP) -> bool {
             return oRecvPkt(pT, pP) != nullptr;

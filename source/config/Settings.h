@@ -119,6 +119,14 @@ namespace Settings {
     // popup content in bug reports.
     inline bool diagnosticPopupEnabled = true;
 
+    // [cloud]
+    // Steam Cloud save redirection and suppression.
+    // enabled = true: routes cloud saves through CloudRedirect (cloud_redirect.dll)
+    // enabled = false, suppressed = true: disables cloud saves & suppresses sync failure notifications
+    // enabled = false, suppressed = false: leaves cloud save behavior untouched (native Steam pass-through)
+    inline bool cloudEnabled = false;
+    inline bool cloudSuppressed = true;
+    inline std::string cloudLibrary = "cloud_redirect.dll";
 
 }
 

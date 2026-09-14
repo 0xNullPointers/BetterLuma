@@ -18,6 +18,7 @@
 #include "runtime/IpcSpecLoader.h"
 #include "runtime/BootDiag.h"
 #include "runtime/LibraryInjector.h"
+#include "runtime/CloudRedirectHost.h"
 
 #include <atomic>
 #include <mutex>
@@ -324,6 +325,8 @@ namespace CoreInit {
             DenuvoAuth::Init();
 
             LumaCore::Attach();
+            // Initialize CloudRedirect host (loads DLL if enabled in settings)
+            CloudRedirectHost::Initialize(SteamInstallPath);
             g_HooksInstalled.store(true);
             HookStatus::SetStartupPhase("hooks_complete");
             HookStatus::WriteToDisk();
@@ -376,6 +379,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
         }
         if (g_HooksInstalled.load()) {
             DirWatch::Stop();
+            // Shutdown CloudRedirect host if initialized
+            CloudRedirectHost::Shutdown();
             if (pvReserved == nullptr) {
                 SteamUI::CoreUnhook();
                 LumaCore::Detach();

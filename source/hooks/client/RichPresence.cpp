@@ -8,6 +8,7 @@
 #include "hooks/capture/RuntimeCapture.h"
 #include "config/LuaLoader.h"
 #include "runtime/Logger.h"
+#include "runtime/CloudRedirectHost.h"
 #include "core/entry.h"
 #include "Steam/Structs.h"
 #include "steam_messages.pb.h"
@@ -298,7 +299,12 @@ namespace RichPresence {
         if (next == g_visibleApp)
             return;
 
+        if (g_visibleApp != 0)
+            CloudRedirectHost::NotifyAppRunning(g_visibleApp, false);
         g_visibleApp = next;
+        if (next != 0)
+            CloudRedirectHost::NotifyAppRunning(next, true);
+
         if (next == 0) {
             LOG_MISCCH_DEBUG("RichPresence: game stack no longer needs local persona update");
         } else {
@@ -356,6 +362,12 @@ namespace RichPresence {
         pPacket->m_pubData = originalData;
         pPacket->m_cubData = originalSize;
         LOG_MISCCH_INFO("RichPresence: delivered staged persona packet bytes={}", stagedLen);
+    }
+
+    AppId_t GetPlayingApp()
+    {
+        std::lock_guard<std::mutex> guard(g_lock);
+        return g_visibleApp;
     }
 
 }

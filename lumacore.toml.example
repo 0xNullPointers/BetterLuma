@@ -75,3 +75,31 @@ diagnostic_popup = true
 # has no manual stub flag set. Set to false to disable automatic bypass
 # (manual flag override in the Lua pattern still works).
 auto_enabled = false
+
+[cloud]
+# Optional Steam Cloud save redirection for unlocked ("lua") games, powered by
+# CloudRedirect (https://github.com/Selectively11/CloudRedirect).
+#
+# When enabled = true:
+#   LumaCore loads cloud_redirect.dll inside Steam, registers every addappid() game
+#   as a redirected app, and routes their Steam Cloud RPCs through CloudRedirect's
+#   cloud-save engine.
+#   Provider sign-in (Google Drive / OneDrive / local folder) is still done through
+#   CloudRedirect's companion app — LumaCore only hosts the DLL.
+#   Note: When enabled = true, the suppressed setting is ignored and CloudRedirect
+#   manages cloud saves directly.
+#
+# When enabled = false:
+#   CloudRedirect is disabled.
+#   - If suppressed = true (default):
+#     LumaCore disables Steam Cloud for Lua-unlocked games and suppresses the
+#     "Cloud Sync Failed" error dialog and warning notifications.
+#   - If suppressed = false:
+#     LumaCore ignores suppression logic and lets native Steam handle cloud save
+#     checks normally without blocking or faking sync state.
+enabled = false
+suppressed = true
+
+# Path to cloud_redirect.dll. Absolute, or relative to the Steam root directory.
+# Defaults to "<Steam>/cloud_redirect.dll" when unset.
+library = "cloud_redirect.dll"

@@ -31,5 +31,6 @@ namespace RichPresence {
     void TrackUpload(const uint8* pBody, uint32 cbBody);
     void DeliverPending(void* pThis, CNetPacket* pPacket,
                         bool (*callOriginal)(void*, CNetPacket*));
+    AppId_t GetPlayingApp();
 
 }

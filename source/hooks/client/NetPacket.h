@@ -40,6 +40,7 @@ public:
     bool     PatchBody = false;
     bool     PatchHdr  = false;
     bool     Shrunk    = false;
+    bool     SuppressSend = false;
     uint32_t NewBodySize = 0;
 
     uint8_t  Frame[kPoolSlots][kPktCap];
@@ -95,6 +96,15 @@ namespace Handlers::FamilySharing {
 
 namespace Handlers::OnlineFix {
     bool HandleSend(const uint8_t* pBody, uint32_t cbBody);
+}
+
+namespace Handlers::Cloud {
+    bool HandleSend(const char* jobName,
+                    const uint8_t* pBody, uint32_t cbBody,
+                    const uint8_t* pHdr, uint32_t cbHdr);
+    void Drain(void* pThis, CNetPacket* pCarrier,
+               bool (*invokeOriginal)(void*, CNetPacket*));
+    void Reset();
 }
 
 } // namespace NetPacket

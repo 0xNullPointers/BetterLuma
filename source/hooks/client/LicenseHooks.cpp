@@ -9,7 +9,9 @@
 #include "hooks/capture/RuntimeCapture.h"
 #include "core/entry.h"
 #include "config/LuaLoader.h"
+#include "config/Settings.h"
 #include "runtime/HookStatus.h"
+#include "runtime/CloudRedirectHost.h"
 
 #include <cstdlib>
 #include <cstdint>
@@ -75,7 +77,18 @@ namespace {
         policy.tracked = LuaLoader::IsLuaTrackedApp(appId);
         policy.owned = LuaLoader::IsOwned(appId);
         policy.familyShared = LuaLoader::IsFamilySharedApp(appId);
-        policy.block = policy.managed && !policy.owned && !policy.familyShared;
+
+        if (Settings::cloudEnabled) {
+            // CloudRedirect manages cloud saves; LumaCore does not block
+            policy.block = false;
+        } else if (!Settings::cloudSuppressed) {
+            // Suppression explicitly disabled; pass through to native Steam
+            policy.block = false;
+        } else {
+            // CloudRedirect disabled & suppression enabled: block cloud for unowned Lua apps
+            policy.block = policy.managed && !policy.owned && !policy.familyShared;
+        }
+
         policy.ownershipClass = CloudOwnershipClass(policy.tracked, policy.managed,
                                                     policy.owned, policy.familyShared);
         return policy;
@@ -135,6 +148,22 @@ namespace {
 
     LM_HOOK(IsCloudEnabledForApp, bool, void* pRemoteStorage, AppId_t appId) {
         const CloudPolicy policy = GetCloudPolicy(appId);
+
+        if (Settings::cloudEnabled && CloudRedirectHost::IsActive() && CloudRedirectHost::IsApp(appId)) {
+            HookStatus::RecordCloudDecision(appId, policy.tracked, policy.managed,
+                                            policy.owned, policy.familyShared,
+                                            true, true,
+                                            "cloud-redirect-allow");
+            {
+                std::lock_guard<std::mutex> hold(g_cloudLogLock);
+                if (g_cloudFamilyAllowedLoggedApps.insert(appId).second) {
+                    LOG_LICENSECH_INFO(
+                        "IsCloudEnabledForApp: appid={} tracked={} managed={} final=true reason=cloud-redirect-allow",
+                        appId, policy.tracked, policy.managed);
+                }
+            }
+            return true;
+        }
 
         if (policy.tracked && policy.familyShared) {
             const bool original = oIsCloudEnabledForApp(pRemoteStorage, appId);
