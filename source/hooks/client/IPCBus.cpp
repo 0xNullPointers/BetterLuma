@@ -14,6 +14,9 @@
 #include "hooks/capture/SteamCapture.h"
 #include <map>
 #include <cstdio>
+#include <filesystem>
+#include <string_view>
+#include <cctype>
 
 // ── pipe retriever, needed by LM_BIND macro (fn##_t expansion) ──
 using GetPipeClient_t = CSteamPipeClient*(*)(void* pEngine, HSteamPipe hSteamPipe);
@@ -156,6 +159,109 @@ namespace {
         return result;
     }
 
+    // Validates that the filename extracted from IPC is safe and does not contain
+    // path separators, directory traversal, drive designators, or reserved device names.
+    static bool IsValidSaveFilename(std::string_view filename) {
+        if (filename.empty() || filename.size() >= 256)
+            return false;
+
+        // Reject path separators, directory traversal sequences, and stream/drive colons
+        for (char c : filename) {
+            if (c == '/' || c == '\\' || c == ':')
+                return false;
+            // Reject non-printable ASCII or control characters
+            if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) == 0x7F)
+                return false;
+        }
+
+        if (filename.find("..") != std::string_view::npos)
+            return false;
+
+        // Windows forbids trailing dots and spaces in file names
+        if (filename.front() == '.' || filename.back() == '.' || filename.back() == ' ')
+            return false;
+
+        // Reject Windows reserved DOS device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+        auto baseName = filename;
+        auto dotPos = baseName.find('.');
+        if (dotPos != std::string_view::npos) {
+            baseName = baseName.substr(0, dotPos);
+        }
+
+        static constexpr std::string_view kReservedNames[] = {
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        };
+
+        for (const auto& reserved : kReservedNames) {
+            if (baseName.size() == reserved.size()) {
+                bool match = true;
+                for (size_t i = 0; i < baseName.size(); ++i) {
+                    if (toupper(static_cast<unsigned char>(baseName[i])) != reserved[i]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Resolves and canonicalizes target save file path, verifying it strictly resides
+    // within the intended userdata/<steamId32>/<appId>/remote/ directory.
+    static bool ResolveSecureSavePath(const char* steamRoot, DWORD steamId32, AppId_t appId,
+                                      const char* filename, char* outPath, size_t outPathSize) {
+        if (!steamRoot || !steamRoot[0] || !steamId32 || !appId || !filename || !filename[0])
+            return false;
+
+        if (!IsValidSaveFilename(filename))
+            return false;
+
+        std::error_code ec;
+        std::filesystem::path root(steamRoot);
+        std::filesystem::path baseDir = root / "userdata" / std::to_string(steamId32) / std::to_string(appId) / "remote";
+        std::filesystem::path targetFile = baseDir / filename;
+
+        std::filesystem::path canonicalBase = std::filesystem::weakly_canonical(baseDir, ec);
+        if (ec) return false;
+
+        std::filesystem::path canonicalTarget = std::filesystem::weakly_canonical(targetFile, ec);
+        if (ec) return false;
+
+        // Verify that canonicalTarget is strictly a child under canonicalBase
+        auto b = canonicalBase.begin();
+        auto t = canonicalTarget.begin();
+        while (b != canonicalBase.end() && t != canonicalTarget.end()) {
+            if (_wcsicmp(b->c_str(), t->c_str()) != 0)
+                return false;
+            ++b;
+            ++t;
+        }
+
+        if (b != canonicalBase.end() || t == canonicalTarget.end())
+            return false;
+
+        // Ensure there is only 1 child component (direct file within remote/)
+        ++t;
+        if (t != canonicalTarget.end())
+            return false;
+
+        std::string safeStr = canonicalTarget.string();
+        // Strip extended path prefix if present to ensure standard Win32 ANSI API compatibility
+        if (safeStr.rfind(R"(\\?\)", 0) == 0) {
+            safeStr.erase(0, 4);
+        }
+
+        if (safeStr.empty() || safeStr.size() >= outPathSize)
+            return false;
+
+        strcpy_s(outPath, outPathSize, safeStr.c_str());
+        return true;
+    }
+
     LM_HOOK(IPCProcessMessage, bool,
               void* pServer, HSteamPipe hPipe,
               CUtlBuffer* pRead, CUtlBuffer* pWrite)
@@ -207,15 +313,14 @@ namespace {
                             }
                             if (filenameBuf[0]) {
                                 char savePath[512];
-                                snprintf(savePath, sizeof(savePath),
-                                         "%s/userdata/%u/%u/remote/%s",
-                                         SteamInstallPath, steamId32, real, filenameBuf);
-
-                                auto ensureCap = [&](uint32_t need) -> bool {
-                                    if (pWrite->m_Memory.m_nAllocationCount >= need) return true;
-                                    if (!pWrite->m_PutOverflowFunc) return false;
-                                    return (pWrite->*pWrite->m_PutOverflowFunc)(need);
-                                };
+                                if (!ResolveSecureSavePath(SteamInstallPath, steamId32, real, filenameBuf, savePath, sizeof(savePath))) {
+                                    LOG_IPCRTR_WARN("\"evt\" \"SaveInject\" \"err\" \"path-rejected\" \"file\" \"{}\"", filenameBuf);
+                                } else {
+                                    auto ensureCap = [&](uint32_t need) -> bool {
+                                        if (pWrite->m_Memory.m_nAllocationCount >= need) return true;
+                                        if (!pWrite->m_PutOverflowFunc) return false;
+                                        return (pWrite->*pWrite->m_PutOverflowFunc)(need);
+                                    };
 
                                 if (fHash == 0x376E83D6) {  // FileExists
                                     if (GetFileAttributesA(savePath) != INVALID_FILE_ATTRIBUTES) {
@@ -273,6 +378,7 @@ namespace {
                                         }
                                         CloseHandle(hFile);
                                     }
+                                }
                                 }
                             }
                         }
