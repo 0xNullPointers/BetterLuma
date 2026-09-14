@@ -70,6 +70,8 @@ namespace {
     void*                 g_steamEngine        = nullptr;
     uint8_t*              g_spawnProcessTarget = nullptr;
     PVOID                 g_vehHandle          = nullptr;
+    std::atomic<bool>     g_vehActive{false};
+    std::atomic<uint32_t> g_vehInFlight{0};
     std::atomic<AppId_t>  g_OnlineFixRealAppId{0};
     std::atomic<uint32>   g_OnlineFixRouteMode{static_cast<uint32>(SteamCapture::OnlineFixRouteMode::None)};
     std::atomic<HSteamPipe> g_StatsScopePipe{0};
@@ -489,10 +491,21 @@ namespace {
     thread_local bool g_inVeh = false;
 
     LONG CALLBACK VehHandler(PEXCEPTION_POINTERS pExInfo) {
+        if (!g_vehActive.load(std::memory_order_acquire)) return EXCEPTION_CONTINUE_SEARCH;
         if (g_inVeh) return EXCEPTION_CONTINUE_SEARCH;
+
+        g_vehInFlight.fetch_add(1, std::memory_order_acq_rel);
+        if (!g_vehActive.load(std::memory_order_acquire)) {
+            g_vehInFlight.fetch_sub(1, std::memory_order_acq_rel);
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+
         struct VehGuard {
             VehGuard()  { g_inVeh = true; }
-            ~VehGuard() { g_inVeh = false; }
+            ~VehGuard() {
+                g_inVeh = false;
+                g_vehInFlight.fetch_sub(1, std::memory_order_acq_rel);
+            }
         } guard;
 
         PCONTEXT ctx = pExInfo->ContextRecord;
@@ -783,8 +796,10 @@ namespace SteamCapture {
             LOG_MISC_WARN("PidTransferCheck: target not found, PID transfer bypass disabled");
         }
 
-        if (!g_captures.empty() || g_spawnProcessTarget || g_pidTransferCheckTarget)
+        if (!g_captures.empty() || g_spawnProcessTarget || g_pidTransferCheckTarget) {
+            g_vehActive.store(true, std::memory_order_release);
             g_vehHandle = AddVectoredExceptionHandler(1, VehHandler);
+        }
 
         // Hook MarkLicenseAsChanged and GetPackageInfo with Detours to capture
         // pCUser and pCPackageInfo on first call. This replaces the old VEH int3
@@ -803,9 +818,14 @@ namespace SteamCapture {
     }
 
     void Uninstall() {
+        g_vehActive.store(false, std::memory_order_release);
         if (g_vehHandle) {
             RemoveVectoredExceptionHandler(g_vehHandle);
             g_vehHandle = nullptr;
+        }
+
+        for (int i = 0; i < 50 && g_vehInFlight.load(std::memory_order_acquire) > 0; ++i) {
+            Sleep(10);
         }
 
         VEH_CLEANUP_CAPTURES(g_captures);
