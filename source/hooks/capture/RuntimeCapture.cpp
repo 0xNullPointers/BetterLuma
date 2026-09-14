@@ -495,7 +495,7 @@ namespace {
             for (auto& cap : g_captures) {
                 if (*cap.funcPtr && ctx->Rip == reinterpret_cast<uint64_t>(*cap.funcPtr)) {
                     *cap.outPtr = reinterpret_cast<void*>(ctx->Rcx);
-                    *reinterpret_cast<uint8_t*>(*cap.funcPtr) = cap.restoreByte;
+                    VehUtil::RestoreByte(*cap.funcPtr, cap.restoreByte);
                     LOG_MISC_INFO("Captured {}: 0x{:X}", cap.label,
                                   reinterpret_cast<uint64_t>(*cap.outPtr));
                     return EXCEPTION_CONTINUE_EXECUTION;
@@ -512,7 +512,7 @@ namespace {
                 uint64_t pGameIdAddr = 0;
                 if (!SafeReadUint64(reinterpret_cast<const void*>(ctx->Rsp + 0x28), pGameIdAddr) || pGameIdAddr == 0) {
                     LOG_MISC_WARN("SpawnProcess: cannot read pGameID pointer from stack (RSP=0x{:X})", ctx->Rsp);
-                    *g_spawnProcessTarget = 0x48;
+                    VehUtil::RestoreByte(g_spawnProcessTarget, 0x48);
                     ctx->EFlags |= 0x100;
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
@@ -521,7 +521,7 @@ namespace {
                 uint64_t gameIdVal = 0;
                 if (!SafeReadUint64(pGameID, gameIdVal)) {
                     LOG_MISC_WARN("SpawnProcess: pGameID at 0x{:X} is unreadable", pGameIdAddr);
-                    *g_spawnProcessTarget = 0x48;
+                    VehUtil::RestoreByte(g_spawnProcessTarget, 0x48);
                     ctx->EFlags |= 0x100;
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
@@ -536,7 +536,7 @@ namespace {
 
                 AppId_t appId = static_cast<AppId_t>(gameIdVal & 0xFFFFFF);
 
-                *g_spawnProcessTarget = 0x48;
+                VehUtil::RestoreByte(g_spawnProcessTarget, 0x48);
                 ctx->EFlags |= 0x100;
 
                 bool hasDepot = LuaLoader::HasDepot(appId);
@@ -711,7 +711,7 @@ namespace {
         if (pExInfo->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
             if (g_spawnProcessTarget
                 && ctx->Rip == reinterpret_cast<uint64_t>(g_spawnProcessTarget + 5)) {
-                *g_spawnProcessTarget = 0xCC;
+                VehUtil::ArmInt3(g_spawnProcessTarget);
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
         }
