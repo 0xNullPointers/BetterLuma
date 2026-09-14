@@ -173,7 +173,7 @@
             o##fn = reinterpret_cast<fn##_t>(_p_);                                \
             g_captures.push_back({                                                \
                 reinterpret_cast<void**>(&o##fn),                                 \
-                reinterpret_cast<void**>(&(outVar)),                              \
+                &(outVar),                                                        \
                 *reinterpret_cast<uint8_t*>(_p_),                                 \
                 #fn                                                               \
             });                                                                   \

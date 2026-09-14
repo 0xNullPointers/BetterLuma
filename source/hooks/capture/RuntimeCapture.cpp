@@ -56,8 +56,8 @@ namespace {
     // GetPackageInfo. Detours hooks fire on every call regardless of when they
     // were installed, so we capture pCUser and pCPackageInfo on the first
     // natural Steam call after login - even if that happens after startup.
-    void* g_pCUser        = nullptr;
-    void* g_pCPackageInfo = nullptr;
+    std::atomic<void*> g_pCUser{nullptr};
+    std::atomic<void*> g_pCPackageInfo{nullptr};
     std::atomic<bool> g_startupInjectionDone{false};
     std::atomic<bool> g_startupRetryThreadStarted{false};
     std::atomic<uint32> g_startupPackageMissLogs{0};
@@ -67,8 +67,8 @@ namespace {
     void StartStartupInjectionRetry();
 
     // ── per-session state ─────────────────────────────────────────────────────
-    void*                 g_steamEngine        = nullptr;
-    uint8_t*              g_spawnProcessTarget = nullptr;
+    std::atomic<void*>    g_steamEngine{nullptr};
+    std::atomic<uint8_t*> g_spawnProcessTarget{nullptr};
     PVOID                 g_vehHandle          = nullptr;
     std::atomic<bool>     g_vehActive{false};
     std::atomic<uint32_t> g_vehInFlight{0};
@@ -222,10 +222,12 @@ namespace {
     // to the existing 480 behaviour. The depth counter is thread-local so
     // concurrent IPC pipes don't bleed into each other.
     LM_HOOK(GetAppIDForCurrentPipe, AppId_t, void* pEngine) {
-        if (g_steamEngine == nullptr && pEngine != nullptr) {
-            g_steamEngine = pEngine;
-            LOG_MISC_INFO("Captured g_steamEngine: 0x{:X}",
-                          reinterpret_cast<uint64_t>(pEngine));
+        if (pEngine != nullptr && g_steamEngine.load(std::memory_order_acquire) == nullptr) {
+            void* expected = nullptr;
+            if (g_steamEngine.compare_exchange_strong(expected, pEngine, std::memory_order_acq_rel)) {
+                LOG_MISC_INFO("Captured g_steamEngine: 0x{:X}",
+                              reinterpret_cast<uint64_t>(pEngine));
+            }
         }
         AppId_t appid = oGetAppIDForCurrentPipe(pEngine);
         AppId_t real = ActiveRouteRealAppIdInternal();
@@ -355,11 +357,13 @@ namespace {
     // regardless of when the hook was installed, so we always get pCUser.
     LM_HOOK(MarkLicenseAsChanged, int64, void* pThis, uint32 packageId, bool bReloadAll) {
         bool justCaptured = false;
-        if (!g_pCUser) {
-            g_pCUser = pThis;
-            justCaptured = true;
-            LOG_PACKAGE_INFO("MarkLicenseAsChanged: captured pCUser=0x{:X}",
-                             reinterpret_cast<uint64_t>(pThis));
+        if (pThis != nullptr && g_pCUser.load(std::memory_order_acquire) == nullptr) {
+            void* expected = nullptr;
+            if (g_pCUser.compare_exchange_strong(expected, pThis, std::memory_order_acq_rel)) {
+                justCaptured = true;
+                LOG_PACKAGE_INFO("MarkLicenseAsChanged: captured pCUser=0x{:X}",
+                                 reinterpret_cast<uint64_t>(pThis));
+            }
         }
         if (justCaptured && g_startupInjectionDone.load(std::memory_order_acquire)
             && oMarkLicenseAsChanged) {
@@ -374,10 +378,12 @@ namespace {
     // ── GetPackageInfo Detours hook ───────────────────────────────────────────
     // Captures pCPackageInfo (RCX = this) on first call - kept for NotifyLicenseChanged.
     LM_HOOK(GetPackageInfo, PackageInfo*, void* pThis, uint32 packageId, int64 p3) {
-        if (!g_pCPackageInfo) {
-            g_pCPackageInfo = pThis;
-            LOG_PACKAGE_INFO("GetPackageInfo: captured pCPackageInfo=0x{:X}",
-                             reinterpret_cast<uint64_t>(pThis));
+        if (pThis != nullptr && g_pCPackageInfo.load(std::memory_order_acquire) == nullptr) {
+            void* expected = nullptr;
+            if (g_pCPackageInfo.compare_exchange_strong(expected, pThis, std::memory_order_acq_rel)) {
+                LOG_PACKAGE_INFO("GetPackageInfo: captured pCPackageInfo=0x{:X}",
+                                 reinterpret_cast<uint64_t>(pThis));
+            }
         }
         PackageInfo* result = oGetPackageInfo(pThis, packageId, p3);
         if (packageId == 0 && result && !g_startupInjectionDone.load(std::memory_order_acquire)) {
@@ -390,8 +396,9 @@ namespace {
     // ── Startup injection ─────────────────────────────────────────────────────
     PackageInfo* ResolvePackage0ForMutation(const char* reason) {
         PackageInfo* pPkg = nullptr;
-        if (g_pCPackageInfo && oGetPackageInfo) {
-            pPkg = oGetPackageInfo(g_pCPackageInfo, 0, 0);
+        void* pPkgInfo = g_pCPackageInfo.load(std::memory_order_acquire);
+        if (pPkgInfo && oGetPackageInfo) {
+            pPkg = oGetPackageInfo(pPkgInfo, 0, 0);
         }
         if (!pPkg) pPkg = PackagePatch::GetPackage0();
         if (!pPkg) {
@@ -440,13 +447,14 @@ namespace {
             return;
         }
 
+        bool hasUser = g_pCUser.load(std::memory_order_acquire) != nullptr;
         g_startupInjectionDone.store(true, std::memory_order_release);
         HookStatus::SetStartupRefreshState(
-            g_pCUser ? "startup-injected" : "startup-injected-local-only");
+            hasUser ? "startup-injected" : "startup-injected-local-only");
         HookStatus::SetPackageState(false, false, true, false);
         LOG_PACKAGE_INFO("TryStartupInjection: reason={} done, verified {} Lua ids in package 0{}",
                          safeReason, additions.size(),
-                         g_pCUser ? "" : " (local-only)");
+                         hasUser ? "" : " (local-only)");
     }
 
     DWORD WINAPI StartupInjectionRetryThread(LPVOID) {
@@ -494,10 +502,11 @@ namespace {
         if (pExInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT) {
             for (auto& cap : g_captures) {
                 if (*cap.funcPtr && ctx->Rip == reinterpret_cast<uint64_t>(*cap.funcPtr)) {
-                    *cap.outPtr = reinterpret_cast<void*>(ctx->Rcx);
+                    if (cap.outPtr)
+                        cap.outPtr->store(reinterpret_cast<void*>(ctx->Rcx), std::memory_order_release);
                     VehUtil::RestoreByte(*cap.funcPtr, cap.restoreByte);
                     LOG_MISC_INFO("Captured {}: 0x{:X}", cap.label,
-                                  reinterpret_cast<uint64_t>(*cap.outPtr));
+                                  reinterpret_cast<uint64_t>(cap.outPtr ? cap.outPtr->load(std::memory_order_relaxed) : nullptr));
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
             }
@@ -506,13 +515,14 @@ namespace {
             //                   pGameID, ...)
             // RCX=pCUser, RDX=pExePath, R8=pCommandLine, R9=pWorkingDir
             // [RSP+0x28]=pGameID (5th arg, pointer to CGameID, low 24 bits = AppId)
-            if (g_spawnProcessTarget
-                && ctx->Rip == reinterpret_cast<uint64_t>(g_spawnProcessTarget)) {
+            uint8_t* pSpawnTarget = g_spawnProcessTarget.load(std::memory_order_acquire);
+            if (pSpawnTarget
+                && ctx->Rip == reinterpret_cast<uint64_t>(pSpawnTarget)) {
                 // Safely read the CGameID pointer argument passed on stack at RSP+0x28
                 uint64_t pGameIdAddr = 0;
                 if (!SafeReadUint64(reinterpret_cast<const void*>(ctx->Rsp + 0x28), pGameIdAddr) || pGameIdAddr == 0) {
                     LOG_MISC_WARN("SpawnProcess: cannot read pGameID pointer from stack (RSP=0x{:X})", ctx->Rsp);
-                    VehUtil::RestoreByte(g_spawnProcessTarget, 0x48);
+                    VehUtil::RestoreByte(pSpawnTarget, 0x48);
                     ctx->EFlags |= 0x100;
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
@@ -521,7 +531,7 @@ namespace {
                 uint64_t gameIdVal = 0;
                 if (!SafeReadUint64(pGameID, gameIdVal)) {
                     LOG_MISC_WARN("SpawnProcess: pGameID at 0x{:X} is unreadable", pGameIdAddr);
-                    VehUtil::RestoreByte(g_spawnProcessTarget, 0x48);
+                    VehUtil::RestoreByte(pSpawnTarget, 0x48);
                     ctx->EFlags |= 0x100;
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
@@ -536,7 +546,7 @@ namespace {
 
                 AppId_t appId = static_cast<AppId_t>(gameIdVal & 0xFFFFFF);
 
-                VehUtil::RestoreByte(g_spawnProcessTarget, 0x48);
+                VehUtil::RestoreByte(pSpawnTarget, 0x48);
                 ctx->EFlags |= 0x100;
 
                 bool hasDepot = LuaLoader::HasDepot(appId);
@@ -709,9 +719,10 @@ namespace {
         }
 
         if (pExInfo->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
-            if (g_spawnProcessTarget
-                && ctx->Rip == reinterpret_cast<uint64_t>(g_spawnProcessTarget + 5)) {
-                VehUtil::ArmInt3(g_spawnProcessTarget);
+            uint8_t* pSpawnTarget = g_spawnProcessTarget.load(std::memory_order_acquire);
+            if (pSpawnTarget
+                && ctx->Rip == reinterpret_cast<uint64_t>(pSpawnTarget + 5)) {
+                VehUtil::ArmInt3(pSpawnTarget);
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
         }
@@ -764,7 +775,8 @@ namespace SteamCapture {
         }
 
         if (auto* _sp_ = ByteSearch(diversion_hModule, "SpawnProcess")) {
-            g_spawnProcessTarget = static_cast<uint8_t*>(_sp_);
+            auto* target = static_cast<uint8_t*>(_sp_);
+            g_spawnProcessTarget.store(target, std::memory_order_release);
             LOG_MISC_INFO("SpawnProcess: VEH trap armed @ 0x{:X}", reinterpret_cast<uintptr_t>(_sp_));
             VehUtil::ArmInt3(_sp_);
         } else {
@@ -797,7 +809,7 @@ namespace SteamCapture {
             LOG_MISC_WARN("PidTransferCheck: target not found, PID transfer bypass disabled");
         }
 
-        if (!g_captures.empty() || g_spawnProcessTarget || g_pidTransferCheckTarget) {
+        if (!g_captures.empty() || g_spawnProcessTarget.load(std::memory_order_acquire) || g_pidTransferCheckTarget) {
             g_vehActive.store(true, std::memory_order_release);
             g_vehHandle = AddVectoredExceptionHandler(1, VehHandler);
         }
@@ -831,9 +843,9 @@ namespace SteamCapture {
 
         VEH_CLEANUP_CAPTURES(g_captures);
 
-        if (g_spawnProcessTarget && *g_spawnProcessTarget == 0xCC)
-            VehUtil::RestoreByte(g_spawnProcessTarget, 0x48);
-        g_spawnProcessTarget = nullptr;
+        uint8_t* pSpawnTarget = g_spawnProcessTarget.exchange(nullptr, std::memory_order_acq_rel);
+        if (pSpawnTarget && *pSpawnTarget == 0xCC)
+            VehUtil::RestoreByte(pSpawnTarget, 0x48);
 
         if (g_pidTransferCheckTarget && *g_pidTransferCheckTarget == 0xCC)
             VehUtil::RestoreByte(g_pidTransferCheckTarget, g_pidTransferCheckOriginalBytes[0]);
@@ -854,20 +866,22 @@ namespace SteamCapture {
         SteamStubAuto::Clear();
         g_StatsScopePipe.store(0, std::memory_order_relaxed);
         g_userStatsAppIdOverrideDepth = 0;
-        g_steamEngine   = nullptr;
+        g_steamEngine.store(nullptr, std::memory_order_release);
         g_GameNameCache.clear();
-        g_pCUser        = nullptr;
-        g_pCPackageInfo = nullptr;
+        g_pCUser.store(nullptr, std::memory_order_release);
+        g_pCPackageInfo.store(nullptr, std::memory_order_release);
+        g_pCAppInfoCache.store(nullptr, std::memory_order_release);
         g_startupInjectionDone.store(false);
         g_startupRetryThreadStarted.store(false);
     }
 
     AppId_t GetAppIDForCurrentPipe() {
-        if (!g_steamEngine || !oGetAppIDForCurrentPipe) {
+        void* pEngine = g_steamEngine.load(std::memory_order_acquire);
+        if (!pEngine || !oGetAppIDForCurrentPipe) {
             LOG_MISC_WARN("GetAppIDForCurrentPipe called before capture - returning 0");
             return 0;
         }
-        auto appid = oGetAppIDForCurrentPipe(g_steamEngine);
+        auto appid = oGetAppIDForCurrentPipe(pEngine);
         if (!appid) {
             LOG_MISC_TRACE("GetAppIDForCurrentPipe: AppId=0(Not GamePipe)");
         } else {
@@ -1088,10 +1102,11 @@ namespace SteamCapture {
         auto& entry = g_GameNameCache.try_emplace(appId).first->second;
         if (!entry.empty()) return entry;
 
-        if (g_pCAppInfoCache && oGetAppDataFromAppInfo) {
+        void* pAppInfo = g_pCAppInfoCache.load(std::memory_order_acquire);
+        if (pAppInfo && oGetAppDataFromAppInfo) {
             char buf[256] = {};
             int64 len = oGetAppDataFromAppInfo(
-                g_pCAppInfoCache, appId, "common/name",
+                pAppInfo, appId, "common/name",
                 reinterpret_cast<uint8*>(buf), sizeof(buf));
             if (len > 1)
                 entry.assign(buf, static_cast<size_t>(len - 1));
@@ -1103,7 +1118,8 @@ namespace SteamCapture {
 
     // ── License refresh (no-restart) ────────────────────────────────
     bool IsReadyForNotify() {
-        return (PackagePatch::GetPackage0() != nullptr || (g_pCPackageInfo && oGetPackageInfo))
+        void* pPkgInfo = g_pCPackageInfo.load(std::memory_order_acquire);
+        return (PackagePatch::GetPackage0() != nullptr || (pPkgInfo && oGetPackageInfo))
             && oCUtlMemoryGrow != nullptr;
     }
 
@@ -1172,9 +1188,10 @@ namespace SteamCapture {
 
         // ── Phase 2: license refresh (Steam re-evaluates package state) ──
         bool refreshedLicense = false;
-        if (g_pCUser && oMarkLicenseAsChanged && oProcessPendingLicenseUpdates) {
-            oMarkLicenseAsChanged(g_pCUser, 0, true);
-            oProcessPendingLicenseUpdates(g_pCUser);
+        void* pUser = g_pCUser.load(std::memory_order_acquire);
+        if (pUser && oMarkLicenseAsChanged && oProcessPendingLicenseUpdates) {
+            oMarkLicenseAsChanged(pUser, 0, true);
+            oProcessPendingLicenseUpdates(pUser);
             HookStatus::SetPackageState(false, false, false, true);
             refreshedLicense = true;
         } else {
