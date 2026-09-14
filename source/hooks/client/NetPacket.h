@@ -99,11 +99,16 @@ namespace Handlers::OnlineFix {
 }
 
 namespace Handlers::Cloud {
+    using RecvDispatcher_t = bool (*)(void* pThis, CNetPacket* pPacket);
+    void SetRecvContext(void* pThis, HCONNECTION hConn, uint8_t* pNetworkBuffer,
+                        RecvDispatcher_t fn);
+    bool HasRecvContext();
     bool HandleSend(const char* jobName,
                     const uint8_t* pBody, uint32_t cbBody,
                     const uint8_t* pHdr, uint32_t cbHdr);
     void Drain(void* pThis, CNetPacket* pCarrier,
-               bool (*invokeOriginal)(void*, CNetPacket*));
+               RecvDispatcher_t invokeOriginal);
+    void DrainImmediate();
     void Reset();
 }
 

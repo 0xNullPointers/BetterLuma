@@ -20,6 +20,20 @@ namespace {
     std::mutex g_queueMutex;
     std::deque<std::vector<uint8_t>> g_pending;
 
+    std::mutex g_contextMutex;
+    void* g_lastRecvThis = nullptr;
+    HCONNECTION g_lastConnection = 0;
+    uint8_t* g_lastNetworkBuffer = nullptr;
+    NetPacket::Handlers::Cloud::RecvDispatcher_t g_recvDispatcher = nullptr;
+
+    static bool SafeInvokeRecv(NetPacket::Handlers::Cloud::RecvDispatcher_t fn, void* pThis, CNetPacket* pPacket) {
+        __try {
+            return fn(pThis, pPacket);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
     static bool ReadVarint(const uint8_t* data, uint32_t size, uint32_t& pos, uint64_t& out) {
         out = 0;
         uint32_t shift = 0;
@@ -73,11 +87,32 @@ namespace {
 
 namespace NetPacket::Handlers::Cloud {
 
+    void SetRecvContext(void* pThis, HCONNECTION hConn, uint8_t* pNetworkBuffer,
+                        RecvDispatcher_t fn)
+    {
+        std::lock_guard<std::mutex> lk(g_contextMutex);
+        g_lastRecvThis = pThis;
+        g_lastConnection = hConn;
+        g_lastNetworkBuffer = pNetworkBuffer;
+        g_recvDispatcher = fn;
+    }
+
+    bool HasRecvContext()
+    {
+        std::lock_guard<std::mutex> lk(g_contextMutex);
+        return g_lastRecvThis != nullptr && g_recvDispatcher != nullptr;
+    }
+
     bool HandleSend(const char* jobName,
                     const uint8_t* pBody, uint32_t cbBody,
                     const uint8_t* pHdr, uint32_t cbHdr)
     {
         if (!CloudRedirectHost::IsActive()) return false;
+        if (!HasRecvContext()) {
+            LOG_NETPACKET_WARN("Cloud: no recv context available to dispatch response for {}, passing through",
+                               jobName ? jobName : "unknown");
+            return false;
+        }
         if (!jobName || strnlen(jobName, 128) >= 128 || !pHdr || cbHdr == 0) return false;
 
         CMsgProtoBufHeader reqHdr;
@@ -138,7 +173,7 @@ namespace NetPacket::Handlers::Cloud {
     }
 
     void Drain(void* pThis, CNetPacket* pCarrier,
-               bool (*invokeOriginal)(void*, CNetPacket*))
+               RecvDispatcher_t invokeOriginal)
     {
         if (!pCarrier || !invokeOriginal) return;
 
@@ -159,16 +194,81 @@ namespace NetPacket::Handlers::Cloud {
             uint32_t origSize = pCarrier->m_cubData;
             pCarrier->m_pubData = pkt.data();
             pCarrier->m_cubData = static_cast<uint32_t>(pkt.size());
-            invokeOriginal(pThis, pCarrier);
+            SafeInvokeRecv(invokeOriginal, pThis, pCarrier);
             pCarrier->m_pubData = origData;
             pCarrier->m_cubData = origSize;
             LOG_NETPACKET_DEBUG("Cloud: delivered {}-byte response", pkt.size());
         }
     }
 
+    void DrainImmediate()
+    {
+        static thread_local bool s_inDrain = false;
+        if (s_inDrain) return;
+
+        void* pThis = nullptr;
+        HCONNECTION hConn = 0;
+        uint8_t* pNetBuf = nullptr;
+        RecvDispatcher_t invokeOriginal = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(g_contextMutex);
+            pThis = g_lastRecvThis;
+            hConn = g_lastConnection;
+            pNetBuf = g_lastNetworkBuffer;
+            invokeOriginal = g_recvDispatcher;
+        }
+
+        if (!pThis || !invokeOriginal) {
+            LOG_NETPACKET_WARN("Cloud: DrainImmediate called without valid recv context");
+            return;
+        }
+
+        struct DrainGuard {
+            bool& flag;
+            DrainGuard(bool& f) : flag(f) { flag = true; }
+            ~DrainGuard() { flag = false; }
+        } guard(s_inDrain);
+
+        for (size_t i = 0; i < 64; ++i) {
+            std::vector<uint8_t> pkt;
+            {
+                std::lock_guard<std::mutex> lk(g_queueMutex);
+                if (g_pending.empty()) break;
+                pkt = std::move(g_pending.front());
+                g_pending.pop_front();
+            }
+
+            if (pkt.empty() || pkt.size() > NetPacket::kPktCap)
+                continue;
+
+            CNetPacket carrier{};
+            carrier.m_hConnection = hConn;
+            carrier.m_pubData = pkt.data();
+            carrier.m_cubData = static_cast<uint32_t>(pkt.size());
+            carrier.m_cRef = 1;
+            carrier.m_pubNetworkBuffer = pNetBuf;
+            carrier.m_pNext = nullptr;
+
+            if (SafeInvokeRecv(invokeOriginal, pThis, &carrier)) {
+                LOG_NETPACKET_DEBUG("Cloud: immediately delivered {}-byte response", pkt.size());
+            } else {
+                LOG_NETPACKET_WARN("Cloud: failed to immediately deliver {}-byte response", pkt.size());
+            }
+        }
+    }
+
     void Reset() {
-        std::lock_guard<std::mutex> lk(g_queueMutex);
-        g_pending.clear();
+        {
+            std::lock_guard<std::mutex> lk(g_queueMutex);
+            g_pending.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lk(g_contextMutex);
+            g_lastRecvThis = nullptr;
+            g_lastConnection = 0;
+            g_lastNetworkBuffer = nullptr;
+            g_recvDispatcher = nullptr;
+        }
     }
 
 } // namespace NetPacket::Handlers::Cloud

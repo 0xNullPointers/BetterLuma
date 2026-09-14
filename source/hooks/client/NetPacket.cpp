@@ -211,7 +211,10 @@ LM_HOOK(BBuildAndAsyncSendFrame, bool,
     if (ParsePacket(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) {
         RouteOutboundDispatch(eMsg, pBody, cbBody, pHdr, cbHdr);
         // Suppress sending frame to Valve network if handled locally by CloudRedirect
-        if (NetPacket::s_tx.SuppressSend) return true;
+        if (NetPacket::s_tx.SuppressSend) {
+            NetPacket::Handlers::Cloud::DrainImmediate();
+            return true;
+        }
         if (NetPacket::s_tx.PatchBody) {
             uint32_t newSize = 0;
             uint8_t* buf = NetPacket::s_tx.Build(pubData, cbHdr, pHdr,
@@ -226,6 +229,14 @@ LM_HOOK(BBuildAndAsyncSendFrame, bool,
 
 LM_HOOK(RecvPkt, void*, void* pThis, CNetPacket* pPacket)
 {
+    if (pThis && pPacket) {
+        NetPacket::Handlers::Cloud::SetRecvContext(
+            pThis, pPacket->m_hConnection, pPacket->m_pubNetworkBuffer,
+            [](void* pT, CNetPacket* pP) -> bool {
+                return oRecvPkt(pT, pP) != nullptr;
+            });
+    }
+
     RichPresence::DeliverPending(
         pThis, pPacket,
         [](void* pT, CNetPacket* pP) -> bool {
@@ -323,6 +334,7 @@ void Uninstall() {
     LM_REMOVE(BBuildAndAsyncSendFrame);
     LM_REMOVE(RecvPkt);
     LM_TX_COMMIT();
+    NetPacket::Handlers::Cloud::Reset();
 }
 
 } // namespace NetPacket
