@@ -10,29 +10,24 @@
 #include "Steam/Structs.h"
 #include "steam_messages.pb.h"
 
-#include <deque>
+#include <unordered_map>
 #include <mutex>
 #include <vector>
 #include <cstring>
+#include <chrono>
 
 namespace {
 
-    std::mutex g_queueMutex;
-    std::deque<std::vector<uint8_t>> g_pending;
+    struct PendingCloudResponse {
+        uint32_t appId = 0;
+        std::string jobName;
+        std::vector<uint8_t> hdrBytes;
+        std::vector<uint8_t> bodyBytes;
+        std::chrono::steady_clock::time_point timestamp{};
+    };
 
-    std::mutex g_contextMutex;
-    void* g_lastRecvThis = nullptr;
-    HCONNECTION g_lastConnection = 0;
-    uint8_t* g_lastNetworkBuffer = nullptr;
-    NetPacket::Handlers::Cloud::RecvDispatcher_t g_recvDispatcher = nullptr;
-
-    static bool SafeInvokeRecv(NetPacket::Handlers::Cloud::RecvDispatcher_t fn, void* pThis, CNetPacket* pPacket) {
-        __try {
-            return fn(pThis, pPacket);
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            return false;
-        }
-    }
+    std::mutex g_pendingMutex;
+    std::unordered_map<uint64_t, PendingCloudResponse> g_pendingResponses;
 
     static bool ReadVarint(const uint8_t* data, uint32_t size, uint32_t& pos, uint64_t& out) {
         out = 0;
@@ -87,32 +82,11 @@ namespace {
 
 namespace NetPacket::Handlers::Cloud {
 
-    void SetRecvContext(void* pThis, HCONNECTION hConn, uint8_t* pNetworkBuffer,
-                        RecvDispatcher_t fn)
-    {
-        std::lock_guard<std::mutex> lk(g_contextMutex);
-        g_lastRecvThis = pThis;
-        g_lastConnection = hConn;
-        g_lastNetworkBuffer = pNetworkBuffer;
-        g_recvDispatcher = fn;
-    }
-
-    bool HasRecvContext()
-    {
-        std::lock_guard<std::mutex> lk(g_contextMutex);
-        return g_lastRecvThis != nullptr && g_recvDispatcher != nullptr;
-    }
-
     bool HandleSend(const char* jobName,
                     const uint8_t* pBody, uint32_t cbBody,
                     const uint8_t* pHdr, uint32_t cbHdr)
     {
         if (!CloudRedirectHost::IsActive()) return false;
-        if (!HasRecvContext()) {
-            LOG_NETPACKET_WARN("Cloud: no recv context available to dispatch response for {}, passing through",
-                               jobName ? jobName : "unknown");
-            return false;
-        }
         if (!jobName || strnlen(jobName, 128) >= 128 || !pHdr || cbHdr == 0) return false;
 
         CMsgProtoBufHeader reqHdr;
@@ -141,7 +115,10 @@ namespace NetPacket::Handlers::Cloud {
         }
 
         CMsgProtoBufHeader respHdr;
-        if (reqHdr.has_jobid_source()) respHdr.set_jobid_target(reqHdr.jobid_source());
+        uint64_t jobId = reqHdr.has_jobid_source() ? reqHdr.jobid_source() : 0;
+        if (jobId != 0) {
+            respHdr.set_jobid_target(jobId);
+        }
         respHdr.set_eresult(eresult);
         respHdr.set_target_job_name(jobName);
 
@@ -152,123 +129,98 @@ namespace NetPacket::Handlers::Cloud {
             return false;
         }
 
-        std::vector<uint8_t> pkt(total);
-        auto* mhdr = reinterpret_cast<MsgHdr*>(pkt.data());
-        mhdr->eMsg = static_cast<EMsg>(static_cast<uint32_t>(k_EMsgServiceMethodResponse) | kMsgHdrProtoFlag);
-        mhdr->headerLength = cbRespHdr;
-        if (!respHdr.SerializeToArray(pkt.data() + sizeof(MsgHdr), cbRespHdr))
+        std::vector<uint8_t> hdrBytes(cbRespHdr);
+        if (!respHdr.SerializeToArray(hdrBytes.data(), cbRespHdr))
             return false;
-        if (respLen)
-            std::memcpy(pkt.data() + sizeof(MsgHdr) + cbRespHdr, respBuf, respLen);
 
-        {
-            std::lock_guard<std::mutex> lk(g_queueMutex);
-            if (g_pending.size() < 64)
-                g_pending.push_back(std::move(pkt));
+        std::vector<uint8_t> bodyBytes;
+        if (respLen > 0) {
+            bodyBytes.assign(respBuf, respBuf + respLen);
         }
 
-        LOG_NETPACKET_DEBUG("Cloud: handled {} app={} -> queued {}-byte response (eresult={})",
-                            jobName, appId, total, eresult);
+        {
+            std::lock_guard<std::mutex> lk(g_pendingMutex);
+            auto now = std::chrono::steady_clock::now();
+            std::erase_if(g_pendingResponses, [&now](const auto& kv) {
+                return (now - kv.second.timestamp) > std::chrono::seconds(30);
+            });
+
+            if (jobId != 0) {
+                g_pendingResponses[jobId] = PendingCloudResponse{
+                    appId,
+                    jobName,
+                    std::move(hdrBytes),
+                    std::move(bodyBytes),
+                    now
+                };
+            }
+        }
+
+        LOG_NETPACKET_DEBUG("Cloud: handled {} app={} (jobId={}) -> prepared {}-byte response (eresult={})",
+                            jobName, appId, jobId, total, eresult);
         return true;
     }
 
-    void Drain(void* pThis, CNetPacket* pCarrier,
-               RecvDispatcher_t invokeOriginal)
+    bool HandleRecv(const CMsgProtoBufHeader& inHdr,
+                    const uint8_t* pBody, uint32_t cbBody)
     {
-        if (!pCarrier || !invokeOriginal) return;
+        uint64_t targetJob = inHdr.has_jobid_target() ? inHdr.jobid_target() : 0;
 
-        // Drain up to queue capacity per cycle to prevent thread starvation
-        for (size_t i = 0; i < 64; ++i) {
-            std::vector<uint8_t> pkt;
-            {
-                std::lock_guard<std::mutex> lk(g_queueMutex);
-                if (g_pending.empty()) return;
-                pkt = std::move(g_pending.front());
-                g_pending.pop_front();
-            }
-
-            if (pkt.empty() || pkt.size() > NetPacket::kPktCap)
-                continue;
-
-            uint8_t* origData = pCarrier->m_pubData;
-            uint32_t origSize = pCarrier->m_cubData;
-            pCarrier->m_pubData = pkt.data();
-            pCarrier->m_cubData = static_cast<uint32_t>(pkt.size());
-            SafeInvokeRecv(invokeOriginal, pThis, pCarrier);
-            pCarrier->m_pubData = origData;
-            pCarrier->m_cubData = origSize;
-            LOG_NETPACKET_DEBUG("Cloud: delivered {}-byte response", pkt.size());
-        }
-    }
-
-    void DrainImmediate()
-    {
-        static thread_local bool s_inDrain = false;
-        if (s_inDrain) return;
-
-        void* pThis = nullptr;
-        HCONNECTION hConn = 0;
-        uint8_t* pNetBuf = nullptr;
-        RecvDispatcher_t invokeOriginal = nullptr;
+        PendingCloudResponse pending;
+        bool found = false;
         {
-            std::lock_guard<std::mutex> lk(g_contextMutex);
-            pThis = g_lastRecvThis;
-            hConn = g_lastConnection;
-            pNetBuf = g_lastNetworkBuffer;
-            invokeOriginal = g_recvDispatcher;
-        }
-
-        if (!pThis || !invokeOriginal) {
-            LOG_NETPACKET_WARN("Cloud: DrainImmediate called without valid recv context");
-            return;
-        }
-
-        struct DrainGuard {
-            bool& flag;
-            DrainGuard(bool& f) : flag(f) { flag = true; }
-            ~DrainGuard() { flag = false; }
-        } guard(s_inDrain);
-
-        for (size_t i = 0; i < 64; ++i) {
-            std::vector<uint8_t> pkt;
-            {
-                std::lock_guard<std::mutex> lk(g_queueMutex);
-                if (g_pending.empty()) break;
-                pkt = std::move(g_pending.front());
-                g_pending.pop_front();
+            std::lock_guard<std::mutex> lk(g_pendingMutex);
+            if (targetJob != 0) {
+                auto it = g_pendingResponses.find(targetJob);
+                if (it != g_pendingResponses.end()) {
+                    pending = std::move(it->second);
+                    g_pendingResponses.erase(it);
+                    found = true;
+                }
             }
-
-            if (pkt.empty() || pkt.size() > NetPacket::kPktCap)
-                continue;
-
-            CNetPacket carrier{};
-            carrier.m_hConnection = hConn;
-            carrier.m_pubData = pkt.data();
-            carrier.m_cubData = static_cast<uint32_t>(pkt.size());
-            carrier.m_cRef = 1;
-            carrier.m_pubNetworkBuffer = pNetBuf;
-            carrier.m_pNext = nullptr;
-
-            if (SafeInvokeRecv(invokeOriginal, pThis, &carrier)) {
-                LOG_NETPACKET_DEBUG("Cloud: immediately delivered {}-byte response", pkt.size());
-            } else {
-                LOG_NETPACKET_WARN("Cloud: failed to immediately deliver {}-byte response", pkt.size());
+            // Fallback: if jobid_target didn't match directly but target_job_name starts with Cloud.
+            if (!found && inHdr.has_target_job_name() && inHdr.target_job_name().rfind("Cloud.", 0) == 0) {
+                const std::string& name = inHdr.target_job_name();
+                for (auto it = g_pendingResponses.begin(); it != g_pendingResponses.end(); ++it) {
+                    if (it->second.jobName == name) {
+                        pending = std::move(it->second);
+                        g_pendingResponses.erase(it);
+                        found = true;
+                        break;
+                    }
+                }
             }
         }
+
+        if (!found) return false;
+
+        if (pending.hdrBytes.size() > NetPacket::kHdrCap || pending.bodyBytes.size() > NetPacket::kBodyCap) {
+            LOG_NETPACKET_WARN("Cloud: pending response too large for pool, skipping replace");
+            return false;
+        }
+
+        std::memcpy(NetPacket::s_rx.Hdr, pending.hdrBytes.data(), pending.hdrBytes.size());
+        NetPacket::s_rx.HdrLen = static_cast<uint32_t>(pending.hdrBytes.size());
+        NetPacket::s_rx.PatchHdr = true;
+
+        if (!pending.bodyBytes.empty()) {
+            std::memcpy(NetPacket::s_rx.Body, pending.bodyBytes.data(), pending.bodyBytes.size());
+            NetPacket::s_rx.BodyLen = static_cast<uint32_t>(pending.bodyBytes.size());
+            NetPacket::s_rx.PatchBody = true;
+        } else {
+            NetPacket::s_rx.BodyLen = 0;
+            NetPacket::s_rx.PatchBody = true;
+        }
+
+        LOG_NETPACKET_INFO("Cloud: replaced wire response for job {} ({}) app={} -> (hdr={} body={})",
+                           targetJob, pending.jobName, pending.appId,
+                           pending.hdrBytes.size(), pending.bodyBytes.size());
+        return true;
     }
 
     void Reset() {
-        {
-            std::lock_guard<std::mutex> lk(g_queueMutex);
-            g_pending.clear();
-        }
-        {
-            std::lock_guard<std::mutex> lk(g_contextMutex);
-            g_lastRecvThis = nullptr;
-            g_lastConnection = 0;
-            g_lastNetworkBuffer = nullptr;
-            g_recvDispatcher = nullptr;
-        }
+        std::lock_guard<std::mutex> lk(g_pendingMutex);
+        g_pendingResponses.clear();
     }
 
 } // namespace NetPacket::Handlers::Cloud

@@ -96,7 +96,7 @@ static void RouteOutboundDispatch(EMsg eMsg, const uint8_t* pBody, uint32_t cbBo
                 if (std::strcmp(jobName, "Cloud.SignalAppExitSyncDone#1") != 0 &&
                     std::strcmp(jobName, "Cloud.ClientConflictResolution#1") != 0) {
                     if (NetPacket::Handlers::Cloud::HandleSend(jobName, pBody, cbBody, pHdr, cbHdr)) {
-                        NetPacket::s_tx.SuppressSend = true;
+                        NetPacket::s_tx.SuppressSend = false;
                         return;
                     }
                 }
@@ -169,8 +169,12 @@ static void RouteInboundDispatch(EMsg eMsg, const uint8_t* pBody, uint32_t cbBod
     switch (eMsg) {
     case k_EMsgServiceMethodResponse: {
         CMsgProtoBufHeader hdr;
-        if (hdr.ParseFromArray(pHdr, cbHdr) && hdr.has_target_job_name())
-            RouteRxService(hdr.target_job_name().c_str(), pBody, cbBody, pHdr, cbHdr);
+        if (hdr.ParseFromArray(pHdr, cbHdr)) {
+            if (NetPacket::Handlers::Cloud::HandleRecv(hdr, pBody, cbBody))
+                return;
+            if (hdr.has_target_job_name())
+                RouteRxService(hdr.target_job_name().c_str(), pBody, cbBody, pHdr, cbHdr);
+        }
         return;
     }
     case k_EMsgClientGetUserStatsResponse:
@@ -210,9 +214,7 @@ LM_HOOK(BBuildAndAsyncSendFrame, bool,
     uint32_t cbHdr, cbBody;
     if (ParsePacket(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) {
         RouteOutboundDispatch(eMsg, pBody, cbBody, pHdr, cbHdr);
-        // Suppress sending frame to Valve network if handled locally by CloudRedirect
         if (NetPacket::s_tx.SuppressSend) {
-            NetPacket::Handlers::Cloud::DrainImmediate();
             return true;
         }
         if (NetPacket::s_tx.PatchBody) {
@@ -229,22 +231,7 @@ LM_HOOK(BBuildAndAsyncSendFrame, bool,
 
 LM_HOOK(RecvPkt, void*, void* pThis, CNetPacket* pPacket)
 {
-    if (pThis && pPacket) {
-        NetPacket::Handlers::Cloud::SetRecvContext(
-            pThis, pPacket->m_hConnection, pPacket->m_pubNetworkBuffer,
-            [](void* pT, CNetPacket* pP) -> bool {
-                return oRecvPkt(pT, pP) != nullptr;
-            });
-    }
-
     RichPresence::DeliverPending(
-        pThis, pPacket,
-        [](void* pT, CNetPacket* pP) -> bool {
-            return oRecvPkt(pT, pP) != nullptr;
-        });
-
-    // Drain queued CloudRedirect responses before processing inbound packet
-    NetPacket::Handlers::Cloud::Drain(
         pThis, pPacket,
         [](void* pT, CNetPacket* pP) -> bool {
             return oRecvPkt(pT, pP) != nullptr;

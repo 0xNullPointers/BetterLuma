@@ -150,6 +150,15 @@ namespace {
         const CloudPolicy policy = GetCloudPolicy(appId);
 
         if (Settings::cloudEnabled && CloudRedirectHost::IsActive() && CloudRedirectHost::IsApp(appId)) {
+            const bool native = oIsCloudEnabledForApp ? oIsCloudEnabledForApp(pRemoteStorage, appId) : true;
+            if (!native) {
+                HookStatus::RecordCloudDecision(appId, policy.tracked, policy.managed,
+                                                policy.owned, policy.familyShared,
+                                                false, false,
+                                                "cloud-redirect-native-disabled");
+                return false;
+            }
+
             HookStatus::RecordCloudDecision(appId, policy.tracked, policy.managed,
                                             policy.owned, policy.familyShared,
                                             true, true,
@@ -166,7 +175,10 @@ namespace {
         }
 
         if (policy.tracked && policy.familyShared) {
-            const bool original = oIsCloudEnabledForApp(pRemoteStorage, appId);
+            const bool original = oIsCloudEnabledForApp ? oIsCloudEnabledForApp(pRemoteStorage, appId) : false;
+            if (!original) {
+                return false;
+            }
             HookStatus::RecordCloudDecision(appId, policy.tracked, policy.managed,
                                             policy.owned, policy.familyShared,
                                             original, true,
