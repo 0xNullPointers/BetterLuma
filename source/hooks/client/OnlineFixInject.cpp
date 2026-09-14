@@ -213,22 +213,28 @@ namespace {
         // collisions across games sharing common directories.
         if (it == g_queue.end() && !candidateBasename.empty()) {
             std::wstring normCwd = (cwd && *cwd) ? NormalizePath(cwd) : std::wstring{};
-            it = std::find_if(g_queue.begin(), g_queue.end(), [&](const QueuedInjection& q) {
-                if (q.expectedBasename != candidateBasename) return false;
-                if (!normCwd.empty() && !q.expectedInstallDir.empty()) {
-                    return IsSubpathOf(normCwd, q.expectedInstallDir) ||
-                           IsSubpathOf(q.expectedInstallDir, normCwd);
+            if (!normCwd.empty()) {
+                it = std::find_if(g_queue.begin(), g_queue.end(), [&](const QueuedInjection& q) {
+                    return q.expectedBasename == candidateBasename &&
+                           !q.expectedInstallDir.empty() &&
+                           (IsSubpathOf(normCwd, q.expectedInstallDir) ||
+                            IsSubpathOf(q.expectedInstallDir, normCwd));
+                });
+            } else {
+                // If no cwd was supplied, only match if there is unambiguously exactly
+                // one queued item matching this basename. Single linear scan without nested find.
+                auto singleMatch = g_queue.end();
+                size_t matchCount = 0;
+                for (auto qIt = g_queue.begin(); qIt != g_queue.end(); ++qIt) {
+                    if (qIt->expectedBasename == candidateBasename) {
+                        singleMatch = qIt;
+                        ++matchCount;
+                    }
                 }
-                // If no cwd was supplied, only match if expectedInstallDir is unspecified
-                // or if there is exactly one queued item matching this basename (unambiguous).
-                if (normCwd.empty()) {
-                    size_t count = std::count_if(g_queue.begin(), g_queue.end(), [&](const QueuedInjection& other) {
-                        return other.expectedBasename == candidateBasename;
-                    });
-                    return count == 1;
+                if (matchCount == 1) {
+                    it = singleMatch;
                 }
-                return false;
-            });
+            }
         }
 
         if (it == g_queue.end()) {
