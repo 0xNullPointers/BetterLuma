@@ -32,10 +32,20 @@ trusted_hosts = [
 ]
 
 [pattern_fetch]
-# Custom mirror URL for per-build pattern TOMLs. {subdir} = steamclient or
-# steamui, {sha} = lowercase hex SHA-256 of the DLL. Leave empty to use
-# the default GitHub + jsDelivr + local cache chain.
-mirror = ""
+# Remote pattern & IPC TOML fetcher URL template.
+# Placeholders:
+#   {channel}   - Repository channel/branch (e.g. "pattern")
+#   {component} - Component name (e.g. "steamclient", "steamui", "steamclientipc")
+#   {subdir}    - Component subdirectory ("steamclient", "steamui", "steamclientipc")
+#   {sha256}    - Lowercase 64-character SHA-256 hash of target DLL
+#   {sha}       - Same as {sha256}
+# NOTE: LumaCore does NOT provide any default remote pattern links.
+# If url_template / mirror is empty or omitted, remote network fetching is skipped
+# and LumaCore operates strictly in cache-only mode.
+# Can also be specified as url_template under [pattern_fetch] or [remote] (OpenSteamTool format).
+# Example:
+# url_template = "https://raw.githubusercontent.com/user/patterns/{channel}/{component}/{sha256}.toml"
+url_template = ""
 
 [stats]
 # Enable stats and achievement API

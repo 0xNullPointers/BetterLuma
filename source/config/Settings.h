@@ -44,10 +44,7 @@ namespace Settings {
     // empty (we do NOT support disabling the gate).
     inline std::vector<std::string> luaHttpAllowlistExtra;
 
-    // [pattern_fetch] mirror
-    // Optional URL template for the pattern repo, with {subdir} and {sha}
-    // placeholders. Empty string means "no override; go straight to the
-    // GitHub primary -> jsDelivr -> gitflic -> local cache fallback chain".
+    // [pattern_fetch] mirror / url_template or [remote] url_template: URL template for pattern TOMLs ({channel}, {component}, {subdir}, {sha256}, {sha}). No default link.
     inline std::string patternMirror;
 
     // [pattern_fetch] gitflic_enabled

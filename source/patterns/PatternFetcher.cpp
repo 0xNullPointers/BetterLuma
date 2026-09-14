@@ -46,22 +46,7 @@ namespace PatternFetcher {
         constexpr std::size_t kMaxBodyBytes = 1u << 20;   // 1 MiB cap before parse
         constexpr DWORD       kHttpTimeoutMs = 10'000;     // 10-second WinHTTP timeout
 
-        constexpr const char* kPrimaryHost = "raw.githubusercontent.com";
-        constexpr const char* kCdnHost     = "cdn.jsdelivr.net";
-        constexpr const char* kPrimaryPathPrefix = "/KoriaPolis/Steam-Auto-PT/pattern/";
-        constexpr const char* kCdnPathPrefix     = "/gh/KoriaPolis/Steam-Auto-PT@pattern/";
 
-        // gitflic mirror lives at midrags/steam-auto-pt on the pattern branch.
-        // Per-file raw fetches are gated behind login on gitflic, so we go
-        // through the public blob-info JSON API instead. The reply carries
-        // the file body in a "blobLines" array — each line is one element
-        // with a "body" field. Stitch them with '\n' to rebuild the TOML.
-        // Tested URL form: /api/project/<owner>/<repo>/blob?file=<path>&branch=<branch>
-        // The response is JSON with a top-level "blobLines": [{"body": ...}, ...].
-        // No auth needed for public projects, ddos-guard cookies handled
-        // automatically by WinHTTP because we don't keep a session.
-        constexpr const char* kGitflicHost = "gitflic.ru";
-        constexpr const char* kGitflicApiPrefix = "/api/project/midrags/steam-auto-pt/blob?branch=pattern&file=";
 
         // entries[subdir][name] -> Entry. The subdir key is a stable string view
         // into a small pool of "steamclient" / "steamui" literals, so we can
@@ -515,117 +500,28 @@ namespace PatternFetcher {
             return ParseToml(body, out, err);
         }
 
-        // ── URL helpers ─────────────────────────────────────────────────────
-
-        std::string BuildPrimaryUrl(const char* subdir, const std::string& sha) {
-            std::string out = "https://";
-            out += kPrimaryHost;
-            out += kPrimaryPathPrefix;
-            out += subdir;
-            out += '/';
-            out += sha;
-            out += ".toml";
-            return out;
-        }
-
-        std::string BuildCdnUrl(const char* subdir, const std::string& sha) {
-            std::string out = "https://";
-            out += kCdnHost;
-            out += kCdnPathPrefix;
-            out += subdir;
-            out += '/';
-            out += sha;
-            out += ".toml";
-            return out;
-        }
-
-        std::string BuildGitflicUrl(const char* subdir, const std::string& sha) {
-            // gitflic wants the file path URL-encoded but their API tolerates
-            // the bare slash — kept literal because every other character in
-            // the file path is hex (lower a-f, 0-9). Saves a percent-encoder.
-            std::string out = "https://";
-            out += kGitflicHost;
-            out += kGitflicApiPrefix;
-            out += subdir;
-            out += '/';
-            out += sha;
-            out += ".toml";
-            return out;
-        }
-
-        // Glue the gitflic blobLines JSON back into the original file body.
-        // The shape is a top-level JSON object with a "blobLines" array,
-        // each element an object with a "body" string. Concatenate body
-        // values with '\n' to reconstruct what the raw file looked like.
-        // No real JSON parser; the response is simple enough that a manual
-        // walk is faster and avoids dragging another dep into LumaCore.
-        // Returns empty string on any structural surprise so the caller
-        // demotes the gitflic leg without leaking malformed text into
-        // ParseToml.
-        std::string StitchGitflicBlobLines(std::string_view body) {
-            constexpr std::string_view kKey = "\"blobLines\"";
-            size_t k = body.find(kKey);
-            if (k == std::string_view::npos) return {};
-            size_t arrStart = body.find('[', k);
-            if (arrStart == std::string_view::npos) return {};
-            // walk array elements, pulling each object's "body" value
-            std::string out;
-            out.reserve(body.size() / 2);
-            size_t pos = arrStart + 1;
-            const std::string_view bodyKey = "\"body\"";
-            while (pos < body.size()) {
-                size_t bk = body.find(bodyKey, pos);
-                if (bk == std::string_view::npos) break;
-                // find the closing ] of the array; if bk is past it, stop
-                size_t arrEnd = body.find(']', pos);
-                if (arrEnd != std::string_view::npos && bk > arrEnd) break;
-                size_t colon = body.find(':', bk + bodyKey.size());
-                if (colon == std::string_view::npos) break;
-                size_t q1 = body.find('"', colon);
-                if (q1 == std::string_view::npos) break;
-                // walk through the JSON-encoded string, honouring \" escapes
-                std::string line;
-                line.reserve(64);
-                bool escaped = false;
-                size_t p = q1 + 1;
-                for (; p < body.size(); ++p) {
-                    char c = body[p];
-                    if (escaped) {
-                        switch (c) {
-                            case 'n': line.push_back('\n'); break;
-                            case 't': line.push_back('\t'); break;
-                            case 'r': line.push_back('\r'); break;
-                            case '"': line.push_back('"');  break;
-                            case '\\': line.push_back('\\'); break;
-                            case '/': line.push_back('/');  break;
-                            default:  line.push_back(c);    break;
-                        }
-                        escaped = false;
-                        continue;
-                    }
-                    if (c == '\\') { escaped = true; continue; }
-                    if (c == '"') break;
-                    line.push_back(c);
-                }
-                if (p >= body.size()) break;
-                if (!out.empty()) out.push_back('\n');
-                out.append(line);
-                pos = p + 1;
-                if (out.size() > kMaxBodyBytes) break;
-            }
-            return out;
-        }
-
-        // Substitute {subdir} and {sha} placeholders in a user-mirror template.
+        // Substitute {channel}, {component}, {subdir}, {sha256}, and {sha} placeholders in mirror template.
         std::string ApplyMirrorTemplate(std::string_view tmpl,
                                         const char* subdir,
-                                        const std::string& sha) {
+                                        const std::string& sha,
+                                        const char* channel = "pattern",
+                                        const char* component = nullptr) {
             std::string out;
             out.reserve(tmpl.size() + 64);
+            const char* comp = component ? component : subdir;
             for (std::size_t i = 0; i < tmpl.size(); ) {
                 if (tmpl[i] == '{') {
+                    if (tmpl.compare(i, 9, "{channel}") == 0) {
+                        out.append(channel); i += 9; continue;
+                    }
+                    if (tmpl.compare(i, 11, "{component}") == 0) {
+                        out.append(comp); i += 11; continue;
+                    }
                     if (tmpl.compare(i, 8, "{subdir}") == 0) {
                         out.append(subdir); i += 8; continue;
+                    }
+                    if (tmpl.compare(i, 8, "{sha256}") == 0) {
+                        out.append(sha); i += 8; continue;
                     }
                     if (tmpl.compare(i, 5, "{sha}") == 0) {
                         out.append(sha); i += 5; continue;
@@ -870,11 +766,7 @@ namespace PatternFetcher {
             return true;
         }
 
-        // Network fetch chain: user-mirror (optional) -> github primary -> cdn.
-        // Returns the first body that fetched, parsed, AND signature-verified
-        // cleanly. The caller owns the cache write so we can keep the parse
-        // result and the body close together. fetchedBody is the raw TOML
-        // text that landed; map is the parsed entry table the caller installs.
+        // Fetch pattern TOML from user-configured mirror template; fails if no mirror configured.
         bool FetchFromNetwork(const char* subdir, const std::string& sha,
                               std::string& fetchedBody, EntryMap& map,
                               Source& sourceOut, std::string& errOut)
@@ -882,126 +774,40 @@ namespace PatternFetcher {
             sourceOut = Source::None;
             errOut.clear();
 
-            // ── Step 0: optional user-mirror additive first try ─────────────
-            if (!Settings::patternMirror.empty()) {
-                std::string url = ApplyMirrorTemplate(Settings::patternMirror,
-                                                      subdir, sha);
-                HttpResult h = HttpGet(url);
-                if (h.status == 200 && !h.bodyTooLarge && !h.netError && !h.body.empty()) {
-                    if (!VerifyLegBody("user-mirror", subdir, url, h.body)) {
-                        // sig rejected; fall through to github primary
-                    } else {
-                        std::string perr;
-                        EntryMap parsed;
-                        if (ParseToml(h.body, parsed, perr)) {
-                            fetchedBody = std::move(h.body);
-                            map         = std::move(parsed);
-                            sourceOut   = Source::UserMirror;
-                            return true;
-                        }
-                        LOG_MISC_DEBUG("PatternFetcher: user-mirror parse failed for {} ({}); "
-                                       "falling through to github primary", subdir, perr);
-                    }
-                } else if (h.bodyTooLarge) {
-                    LOG_MISC_DEBUG("PatternFetcher: user-mirror body >1MiB for {}; "
-                                   "falling through to github primary", subdir);
-                } else {
-                    LOG_MISC_DEBUG("PatternFetcher: user-mirror failed for {} (status={} "
-                                   "neterr={} note='{}'); falling through to github primary",
-                                   subdir, h.status, h.netError ? 1 : 0, h.note);
-                }
+            if (Settings::patternMirror.empty()) {
+                errOut = "no mirror configured in lumacore.toml";
+                return false;
             }
 
-            // ── Step 1: GitHub primary leg (with 404 short-circuit) ──────────
-            bool primary404 = false;
-            {
-                std::string url = BuildPrimaryUrl(subdir, sha);
-                HttpResult h = HttpGet(url);
-                if (h.status == 200 && !h.bodyTooLarge && !h.netError && !h.body.empty()) {
-                    if (!VerifyLegBody("github", subdir, url, h.body)) {
-                        // sig rejected; fall through to cdn
-                    } else {
-                        std::string perr;
-                        EntryMap parsed;
-                        if (ParseToml(h.body, parsed, perr)) {
-                            fetchedBody = std::move(h.body);
-                            map         = std::move(parsed);
-                            sourceOut   = Source::Github;
-                            return true;
-                        }
-                        LOG_MISC_DEBUG("PatternFetcher: github primary parse failed for {} ({})",
-                                       subdir, perr);
-                    }
-                } else if (h.status == 404) {
-                    primary404 = true;
+            std::string url = ApplyMirrorTemplate(Settings::patternMirror, subdir, sha, "pattern");
+            HttpResult h = HttpGet(url);
+            if (h.status == 200 && !h.bodyTooLarge && !h.netError && !h.body.empty()) {
+                if (!VerifyLegBody("mirror", subdir, url, h.body)) {
+                    errOut = "signature verification failed";
+                    return false;
                 }
+                std::string perr;
+                EntryMap parsed;
+                if (ParseToml(h.body, parsed, perr)) {
+                    fetchedBody = std::move(h.body);
+                    map         = std::move(parsed);
+                    sourceOut   = Source::UserMirror;
+                    return true;
+                }
+                errOut = "toml parse failed: " + perr;
+                LOG_MISC_DEBUG("PatternFetcher: mirror parse failed for {} ({})", subdir, perr);
+                return false;
             }
 
-            // ── Step 2: jsDelivr CDN (skipped on primary 404) ────────────────
-            if (!primary404) {
-                std::string url = BuildCdnUrl(subdir, sha);
-                HttpResult h = HttpGet(url);
-                if (h.status == 200 && !h.bodyTooLarge && !h.netError && !h.body.empty()) {
-                    if (!VerifyLegBody("cdn", subdir, url, h.body)) {
-                        // sig rejected; fall through to gitflic
-                    } else {
-                        std::string perr;
-                        EntryMap parsed;
-                        if (ParseToml(h.body, parsed, perr)) {
-                            fetchedBody = std::move(h.body);
-                            map         = std::move(parsed);
-                            sourceOut   = Source::Cdn;
-                            return true;
-                        }
-                        LOG_MISC_DEBUG("PatternFetcher: cdn parse failed for {} ({})",
-                                       subdir, perr);
-                    }
-                }
+            if (h.bodyTooLarge) {
+                errOut = "mirror response body >1MiB";
+            } else if (h.status != 200) {
+                errOut = "mirror http status " + std::to_string(h.status);
+            } else {
+                errOut = h.note.empty() ? "mirror network error" : h.note;
             }
-
-            // ── Step 3: gitflic.ru fallback for blocked regions ──────────────
-            // Hits the public blob-info JSON API and stitches blobLines back
-            // into a TOML body before parsing. Skipped when github primary
-            // returned 404 (means the file genuinely doesn't exist yet, not
-            // a network issue) and when the user explicitly disables it.
-            if (!primary404 && Settings::patternGitflicEnabled) {
-                std::string url = BuildGitflicUrl(subdir, sha);
-                HttpResult h = HttpGet(url);
-                if (h.status == 200 && !h.bodyTooLarge && !h.netError && !h.body.empty()) {
-                    std::string stitched = StitchGitflicBlobLines(h.body);
-                    if (stitched.empty()) {
-                        LOG_MISC_DEBUG("PatternFetcher: gitflic stitch failed for {} "
-                                       "(body shape changed?)", subdir);
-                    } else {
-                        // gitflic publishes blobLines around the same body
-                        // the maintainer signed, so the .sig sits next to
-                        // the canonical TOML on github. Reuse the github
-                        // primary URL for the .sig fetch so the gitflic
-                        // mirror does not need its own sig endpoint.
-                        std::string sigPeerUrl = BuildPrimaryUrl(subdir, sha);
-                        if (!VerifyLegBody("gitflic", subdir, sigPeerUrl, stitched)) {
-                            // sig rejected; bail out of the network chain
-                        } else {
-                            std::string perr;
-                            EntryMap parsed;
-                            if (ParseToml(stitched, parsed, perr)) {
-                                fetchedBody = std::move(stitched);
-                                map         = std::move(parsed);
-                                sourceOut   = Source::Gitflic;
-                                return true;
-                            }
-                            LOG_MISC_DEBUG("PatternFetcher: gitflic parse failed for {} ({})",
-                                           subdir, perr);
-                        }
-                    }
-                } else {
-                    LOG_MISC_DEBUG("PatternFetcher: gitflic failed for {} (status={} "
-                                   "neterr={} note='{}')",
-                                   subdir, h.status, h.netError ? 1 : 0, h.note);
-                }
-            }
-
-            errOut = "all network legs failed";
+            LOG_MISC_DEBUG("PatternFetcher: mirror failed for {} (status={} neterr={} note='{}')",
+                           subdir, h.status, h.netError ? 1 : 0, h.note);
             return false;
         }
     } // anonymous namespace

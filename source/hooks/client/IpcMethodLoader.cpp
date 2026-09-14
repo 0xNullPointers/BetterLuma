@@ -6,6 +6,7 @@
 #include "hooks/client/IpcMethodLoader.h"
 #include "runtime/Logger.h"
 #include "runtime/RuntimeHttp.h"
+#include "config/Settings.h"
 #include "core/entry.h"
 
 #include <toml++/toml.hpp>
@@ -100,53 +101,34 @@ namespace IpcLoader {
             return std::filesystem::path(SteamInstallPath) / "lumacore" / "pattern" / kIPCSubdir / (sha + ".toml");
         }
 
-        std::string StitchGitflicBlobLines(std::string_view body) {
-            constexpr std::string_view kKey = "\"blobLines\"";
-            size_t k = body.find(kKey);
-            if (k == std::string_view::npos) return {};
-            size_t arrStart = body.find('[', k);
-            if (arrStart == std::string_view::npos) return {};
+        // Substitute {channel}, {component}, {subdir}, {sha256}, and {sha} placeholders in mirror template.
+        std::string ApplyMirrorTemplate(std::string_view tmpl,
+                                        const char* subdir,
+                                        const std::string& sha,
+                                        const char* channel = "pattern",
+                                        const char* component = nullptr) {
             std::string out;
-            out.reserve(body.size() / 2);
-            size_t pos = arrStart + 1;
-            const std::string_view bodyKey = "\"body\"";
-            while (pos < body.size()) {
-                size_t bk = body.find(bodyKey, pos);
-                if (bk == std::string_view::npos) break;
-                size_t arrEnd = body.find(']', pos);
-                if (arrEnd != std::string_view::npos && bk > arrEnd) break;
-                size_t colon = body.find(':', bk + bodyKey.size());
-                if (colon == std::string_view::npos) break;
-                size_t q1 = body.find('"', colon);
-                if (q1 == std::string_view::npos) break;
-                std::string line;
-                line.reserve(64);
-                bool escaped = false;
-                size_t p = q1 + 1;
-                for (; p < body.size(); ++p) {
-                    char c = body[p];
-                    if (escaped) {
-                        switch (c) {
-                            case 'n': line.push_back('\n'); break;
-                            case 't': line.push_back('\t'); break;
-                            case 'r': line.push_back('\r'); break;
-                            case '"': line.push_back('"');  break;
-                            case '\\': line.push_back('\\'); break;
-                            case '/': line.push_back('/');  break;
-                            default:  line.push_back(c);    break;
-                        }
-                        escaped = false;
-                        continue;
+            out.reserve(tmpl.size() + 64);
+            const char* comp = component ? component : subdir;
+            for (std::size_t i = 0; i < tmpl.size(); ) {
+                if (tmpl[i] == '{') {
+                    if (tmpl.compare(i, 9, "{channel}") == 0) {
+                        out.append(channel); i += 9; continue;
                     }
-                    if (c == '\\') { escaped = true; continue; }
-                    if (c == '"') break;
-                    line.push_back(c);
+                    if (tmpl.compare(i, 11, "{component}") == 0) {
+                        out.append(comp); i += 11; continue;
+                    }
+                    if (tmpl.compare(i, 8, "{subdir}") == 0) {
+                        out.append(subdir); i += 8; continue;
+                    }
+                    if (tmpl.compare(i, 8, "{sha256}") == 0) {
+                        out.append(sha); i += 8; continue;
+                    }
+                    if (tmpl.compare(i, 5, "{sha}") == 0) {
+                        out.append(sha); i += 5; continue;
+                    }
                 }
-                if (p >= body.size()) break;
-                if (!out.empty()) out.push_back('\n');
-                out.append(line);
-                pos = p + 1;
-                if (out.size() > (1u << 20)) break;
+                out.push_back(tmpl[i]); ++i;
             }
             return out;
         }
@@ -160,36 +142,18 @@ namespace IpcLoader {
             out.write(body.data(), static_cast<std::streamsize>(body.size()));
         }
 
+        // Fetch IPC method specs strictly from configured mirror template; fails if no mirror configured.
         bool FetchFromNetwork(const std::string& sha, std::string& bodyOut) {
-            const std::string ghUrl = "https://raw.githubusercontent.com/KoriaPolis/Steam-Auto-PT/pattern/"
-                                      + std::string(kIPCSubdir) + "/" + sha + ".toml";
-            const std::string cdnUrl = "https://cdn.jsdelivr.net/gh/KoriaPolis/Steam-Auto-PT@pattern/"
-                                       + std::string(kIPCSubdir) + "/" + sha + ".toml";
-            const std::string gfUrl = "https://gitflic.ru/api/project/midrags/steam-auto-pt/blob?branch=pattern&file="
-                                      + std::string(kIPCSubdir) + "/" + sha + ".toml";
-
-            for (const auto& url : {ghUrl, cdnUrl}) {
-                LOG_IPC_DEBUG("IpcLoader: fetching ipc_methods from {}", url);
-                auto resp = RuntimeHttp::Get(url);
-                if (!resp.networkError && resp.status == 200 && !resp.body.empty()) {
-                    bodyOut = std::move(resp.body);
-                    return true;
-                }
-                if (resp.status == 404) {
-                    LOG_WARN("IpcLoader: mirror has no such file (HTTP 404): {}", url);
-                    break;
-                }
+            if (Settings::patternMirror.empty()) {
+                return false;
             }
 
-            LOG_IPC_DEBUG("IpcLoader: fetching ipc_methods from gitflic");
-            auto gfResp = RuntimeHttp::Get(gfUrl);
-            if (!gfResp.networkError && gfResp.status == 200 && !gfResp.body.empty()) {
-                std::string stitched = StitchGitflicBlobLines(gfResp.body);
-                if (!stitched.empty()) {
-                    bodyOut = std::move(stitched);
-                    return true;
-                }
-                LOG_WARN("IpcLoader: gitflic stitch failed");
+            const std::string url = ApplyMirrorTemplate(Settings::patternMirror, kIPCSubdir, sha, "ipc", "steamclient");
+            LOG_IPC_DEBUG("IpcLoader: fetching ipc_methods from {}", url);
+            auto resp = RuntimeHttp::Get(url);
+            if (!resp.networkError && resp.status == 200 && !resp.body.empty()) {
+                bodyOut = std::move(resp.body);
+                return true;
             }
 
             return false;

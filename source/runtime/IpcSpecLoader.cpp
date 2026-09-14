@@ -113,127 +113,36 @@ namespace IpcSpecLoader {
             return CacheDir() / (sha + ".toml");
         }
 
-        std::string StitchGitflicBlobLines(std::string_view body) {
-            constexpr std::string_view kKey = "\"blobLines\"";
-            size_t k = body.find(kKey);
-            if (k == std::string_view::npos) return {};
-            size_t arrStart = body.find('[', k);
-            if (arrStart == std::string_view::npos) return {};
+        // Substitute {channel}, {component}, {subdir}, {sha256}, and {sha} placeholders in mirror template.
+        std::string ApplyMirrorTemplate(std::string_view tmpl,
+                                        const char* subdir,
+                                        const std::string& sha,
+                                        const char* channel = "pattern",
+                                        const char* component = nullptr) {
             std::string out;
-            out.reserve(body.size() / 2);
-            size_t pos = arrStart + 1;
-            constexpr std::string_view bodyKey = "\"body\"";
-            while (pos < body.size()) {
-                size_t bk = body.find(bodyKey, pos);
-                if (bk == std::string_view::npos) break;
-                size_t arrEnd = body.find(']', pos);
-                if (arrEnd != std::string_view::npos && bk > arrEnd) break;
-                size_t colon = body.find(':', bk + bodyKey.size());
-                if (colon == std::string_view::npos) break;
-                size_t q1 = body.find('"', colon);
-                if (q1 == std::string_view::npos) break;
-                std::string line;
-                bool escaped = false;
-                size_t p = q1 + 1;
-                for (; p < body.size(); ++p) {
-                    char c = body[p];
-                    if (escaped) {
-                        switch (c) {
-                            case 'n': line.push_back('\n'); break;
-                            case 't': line.push_back('\t'); break;
-                            case 'r': line.push_back('\r'); break;
-                            case '"': line.push_back('"'); break;
-                            case '\\': line.push_back('\\'); break;
-                            case '/': line.push_back('/'); break;
-                            default: line.push_back(c); break;
-                        }
-                        escaped = false;
-                        continue;
+            out.reserve(tmpl.size() + 64);
+            const char* comp = component ? component : subdir;
+            for (std::size_t i = 0; i < tmpl.size(); ) {
+                if (tmpl[i] == '{') {
+                    if (tmpl.compare(i, 9, "{channel}") == 0) {
+                        out.append(channel); i += 9; continue;
                     }
-                    if (c == '\\') { escaped = true; continue; }
-                    if (c == '"') break;
-                    line.push_back(c);
+                    if (tmpl.compare(i, 11, "{component}") == 0) {
+                        out.append(comp); i += 11; continue;
+                    }
+                    if (tmpl.compare(i, 8, "{subdir}") == 0) {
+                        out.append(subdir); i += 8; continue;
+                    }
+                    if (tmpl.compare(i, 8, "{sha256}") == 0) {
+                        out.append(sha); i += 8; continue;
+                    }
+                    if (tmpl.compare(i, 5, "{sha}") == 0) {
+                        out.append(sha); i += 5; continue;
+                    }
                 }
-                if (p >= body.size()) break;
-                if (!out.empty()) out.push_back('\n');
-                out.append(line);
-                pos = p + 1;
-                if (out.size() > kMaxBodyBytes) return {};
+                out.push_back(tmpl[i]); ++i;
             }
             return out;
-        }
-
-        // ── HTTP GET (minimal, single-leg) ──────────────────────────────────
-
-        struct HttpResult {
-            bool        ok    = false;
-            int         status = 0;
-            std::string body;
-        };
-
-        HttpResult HttpGet(const wchar_t* host, const wchar_t* path) {
-            HttpResult r{};
-            HINTERNET hSession = WinHttpOpen(L"LumaCore-IpcSpecLoader/1.0",
-                                             WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                                             WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-            if (!hSession) return r;
-
-            WinHttpSetTimeouts(hSession,
-                               static_cast<int>(kHttpTimeoutMs),
-                               static_cast<int>(kHttpTimeoutMs),
-                               static_cast<int>(kHttpTimeoutMs),
-                               static_cast<int>(kHttpTimeoutMs));
-
-            HINTERNET hConn = WinHttpConnect(hSession, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
-            if (!hConn) { WinHttpCloseHandle(hSession); return r; }
-
-            HINTERNET hReq = WinHttpOpenRequest(hConn, L"GET", path, nullptr,
-                                                WINHTTP_NO_REFERER,
-                                                WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                                WINHTTP_FLAG_SECURE);
-            if (!hReq) { WinHttpCloseHandle(hConn); WinHttpCloseHandle(hSession); return r; }
-
-            BOOL ok = WinHttpSendRequest(hReq, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                                         WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
-            if (ok) ok = WinHttpReceiveResponse(hReq, nullptr);
-            if (!ok) {
-                WinHttpCloseHandle(hReq);
-                WinHttpCloseHandle(hConn);
-                WinHttpCloseHandle(hSession);
-                return r;
-            }
-
-            DWORD status = 0;
-            DWORD szStatus = sizeof(status);
-            WinHttpQueryHeaders(hReq, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                                WINHTTP_HEADER_NAME_BY_INDEX, &status, &szStatus,
-                                WINHTTP_NO_HEADER_INDEX);
-            r.status = static_cast<int>(status);
-
-            if (r.status == 200) {
-                r.body.reserve(64 * 1024);
-                std::array<char, 16 * 1024> buf{};
-                for (;;) {
-                    DWORD avail = 0;
-                    if (!WinHttpQueryDataAvailable(hReq, &avail)) break;
-                    if (avail == 0) break;
-                    while (avail > 0) {
-                        DWORD want = std::min<DWORD>(avail, static_cast<DWORD>(buf.size()));
-                        DWORD got = 0;
-                        if (!WinHttpReadData(hReq, buf.data(), want, &got)) break;
-                        if (got == 0) { avail = 0; break; }
-                        if (r.body.size() + got > kMaxBodyBytes) { avail = 0; break; }
-                        r.body.append(buf.data(), got);
-                        avail -= got;
-                    }
-                }
-                r.ok = !r.body.empty();
-            }
-
-            WinHttpCloseHandle(hReq);
-            WinHttpCloseHandle(hConn);
-            WinHttpCloseHandle(hSession);
-            return r;
         }
 
         // ── TOML parsing ────────────────────────────────────────────────────
@@ -345,58 +254,31 @@ namespace IpcSpecLoader {
             return ParseTomlBody(body, out);
         }
 
+        // Fetch IPC spec TOML strictly from user-configured mirror template; fails if no mirror configured.
         bool FetchFromNetwork(const std::string& sha, std::string& bodyOut,
                               std::string& sourceOut, std::string& errorOut) {
             sourceOut.clear();
             errorOut.clear();
-            const std::string path = "steamclientipc/" + sha + ".toml";
-            const std::string rawUrl =
-                "https://raw.githubusercontent.com/KoriaPolis/Steam-Auto-PT/pattern/" + path;
-            const std::string cdnUrl =
-                "https://cdn.jsdelivr.net/gh/KoriaPolis/Steam-Auto-PT@pattern/" + path;
-            const std::string gfUrl =
-                "https://gitflic.ru/api/project/midrags/steam-auto-pt/blob?branch=pattern&file=" + path;
 
-            bool primary404 = false;
-            for (const auto& url : {rawUrl, cdnUrl}) {
-                if (primary404) break;
-                LOG_MISC_DEBUG("IpcSpecLoader: fetching {}", url);
-                auto resp = RuntimeHttp::Get(url);
-                if (!resp.networkError && resp.status == 200 && !resp.body.empty()) {
-                    bodyOut = std::move(resp.body);
-                    sourceOut = (url == rawUrl) ? "github-raw" : "jsdelivr";
-                    return true;
-                }
-                if (resp.status == 404) primary404 = true;
-                errorOut = "status=" + std::to_string(resp.status) +
-                           " net=" + std::to_string(resp.networkError ? 1 : 0) +
-                           " diag=" + resp.diagnostic;
-                LOG_MISC_DEBUG("IpcSpecLoader: fetch failed status={} net={} diag={}",
-                               resp.status, resp.networkError ? 1 : 0, resp.diagnostic);
+            if (Settings::patternMirror.empty()) {
+                errorOut = "no mirror configured in lumacore.toml";
+                return false;
             }
 
-            if (!primary404 && Settings::patternGitflicEnabled) {
-                LOG_MISC_DEBUG("IpcSpecLoader: fetching gitflic");
-                auto resp = RuntimeHttp::Get(gfUrl);
-                if (!resp.networkError && resp.status == 200 && !resp.body.empty()) {
-                    std::string stitched = StitchGitflicBlobLines(resp.body);
-                    if (!stitched.empty()) {
-                        bodyOut = std::move(stitched);
-                        sourceOut = "gitflic";
-                        return true;
-                    }
-                    errorOut = "gitflic-stitch-failed";
-                    LOG_MISC_WARN("IpcSpecLoader: gitflic stitch failed");
-                } else {
-                    errorOut = "gitflic status=" + std::to_string(resp.status) +
-                               " net=" + std::to_string(resp.networkError ? 1 : 0) +
-                               " diag=" + resp.diagnostic;
-                    LOG_MISC_DEBUG("IpcSpecLoader: gitflic failed status={} net={} diag={}",
-                                   resp.status, resp.networkError ? 1 : 0,
-                                   resp.diagnostic);
-                }
+            const std::string url = ApplyMirrorTemplate(Settings::patternMirror, "steamclientipc", sha, "ipc", "steamclient");
+            LOG_MISC_DEBUG("IpcSpecLoader: fetching {}", url);
+            auto resp = RuntimeHttp::Get(url);
+            if (!resp.networkError && resp.status == 200 && !resp.body.empty()) {
+                bodyOut = std::move(resp.body);
+                sourceOut = "user-mirror";
+                return true;
             }
 
+            errorOut = "status=" + std::to_string(resp.status) +
+                       " net=" + std::to_string(resp.networkError ? 1 : 0) +
+                       " diag=" + resp.diagnostic;
+            LOG_MISC_DEBUG("IpcSpecLoader: fetch failed status={} net={} diag={}",
+                           resp.status, resp.networkError ? 1 : 0, resp.diagnostic);
             return false;
         }
 

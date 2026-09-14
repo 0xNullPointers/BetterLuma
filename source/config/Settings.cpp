@@ -129,14 +129,22 @@ namespace Settings {
                 }
             }
 
-            // [pattern_fetch]
+            // [pattern_fetch] and [remote] (OpenSteamTool compatibility)
             if (auto patternTbl = tbl["pattern_fetch"].as_table()) {
                 if (auto m = (*patternTbl)["mirror"].value<std::string>())
                     patternMirror = *m;
+                if (auto u = (*patternTbl)["url_template"].value<std::string>())
+                    patternMirror = *u;
                 if (auto g = (*patternTbl)["gitflic_enabled"].value<bool>())
                     patternGitflicEnabled = *g;
                 if (auto r = (*patternTbl)["require_signed"].value<bool>())
                     patternRequireSigned = *r;
+            }
+            if (auto remoteTbl = tbl["remote"].as_table()) {
+                if (auto u = (*remoteTbl)["url_template"].value<std::string>())
+                    patternMirror = *u;
+                if (auto m = (*remoteTbl)["mirror"].value<std::string>())
+                    patternMirror = *m;
             }
 
             // [manifest_fetch]
