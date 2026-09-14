@@ -209,24 +209,32 @@ LM_HOOK(BBuildAndAsyncSendFrame, bool,
     if (eWebSocketOpCode != k_eWebSocketOpCode_Binary)
         return oBBuildAndAsyncSendFrame(pObject, eWebSocketOpCode, pubData, cubData);
 
-    EMsg eMsg;
-    const uint8_t *pHdr, *pBody;
-    uint32_t cbHdr, cbBody;
-    if (ParsePacket(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) {
-        RouteOutboundDispatch(eMsg, pBody, cbBody, pHdr, cbHdr);
-        if (NetPacket::s_tx.SuppressSend) {
-            return true;
-        }
-        if (NetPacket::s_tx.PatchBody) {
-            uint32_t newSize = 0;
-            uint8_t* buf = NetPacket::s_tx.Build(pubData, cbHdr, pHdr,
-                                                  NetPacket::s_tx.Body, NetPacket::s_tx.BodyLen,
-                                                  &newSize, s_txLock);
-            if (buf)
-                return oBBuildAndAsyncSendFrame(pObject, eWebSocketOpCode, buf, newSize);
+    uint8_t* sendBuf = pubData;
+    uint32_t sendSize = cubData;
+
+    {
+        std::lock_guard<std::mutex> lock(s_txLock);
+        EMsg eMsg;
+        const uint8_t *pHdr, *pBody;
+        uint32_t cbHdr, cbBody;
+        if (ParsePacket(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) {
+            RouteOutboundDispatch(eMsg, pBody, cbBody, pHdr, cbHdr);
+            if (NetPacket::s_tx.SuppressSend) {
+                return true;
+            }
+            if (NetPacket::s_tx.PatchBody) {
+                sendBuf = NetPacket::s_tx.Build(pubData, cbHdr, pHdr,
+                                                NetPacket::s_tx.Body, NetPacket::s_tx.BodyLen,
+                                                &sendSize);
+                if (!sendBuf) {
+                    sendBuf = pubData;
+                    sendSize = cubData;
+                }
+            }
         }
     }
-    return oBBuildAndAsyncSendFrame(pObject, eWebSocketOpCode, pubData, cubData);
+
+    return oBBuildAndAsyncSendFrame(pObject, eWebSocketOpCode, sendBuf, sendSize);
 }
 
 LM_HOOK(RecvPkt, void*, void* pThis, CNetPacket* pPacket)
@@ -237,28 +245,32 @@ LM_HOOK(RecvPkt, void*, void* pThis, CNetPacket* pPacket)
             return oRecvPkt(pT, pP) != nullptr;
         });
 
-    EMsg eMsg;
-    const uint8_t *pBody, *pHdr;
-    uint32_t cbBody, cbHdr;
-    if (ParsePacket(pPacket->m_pubData, pPacket->m_cubData,
-                    eMsg, pHdr, cbHdr, pBody, cbBody)) {
-        NetPacket::s_rx.Shrunk = false;
-        RouteInboundDispatch(eMsg, pBody, cbBody, pHdr, cbHdr);
+    if (pPacket && pPacket->m_pubData && pPacket->m_cubData >= sizeof(MsgHdr)) {
+        std::lock_guard<std::mutex> lock(s_rxLock);
+        EMsg eMsg;
+        const uint8_t *pBody, *pHdr;
+        uint32_t cbBody, cbHdr;
+        if (ParsePacket(pPacket->m_pubData, pPacket->m_cubData,
+                        eMsg, pHdr, cbHdr, pBody, cbBody)) {
+            NetPacket::s_rx.Shrunk = false;
+            RouteInboundDispatch(eMsg, pBody, cbBody, pHdr, cbHdr);
 
-        if (NetPacket::s_rx.Shrunk && NetPacket::s_rx.PatchHdr) {
-            NetPacket::s_rx.Replace(pPacket,
-                NetPacket::s_rx.Hdr, NetPacket::s_rx.HdrLen,
-                pBody, NetPacket::s_rx.NewBodySize, s_rxLock);
-        } else if (NetPacket::s_rx.Shrunk) {
-            pPacket->m_cubData = sizeof(MsgHdr) + cbHdr + NetPacket::s_rx.NewBodySize;
-        } else if (NetPacket::s_rx.PatchHdr || NetPacket::s_rx.PatchBody) {
-            NetPacket::s_rx.Replace(pPacket,
-                NetPacket::s_rx.PatchHdr  ? NetPacket::s_rx.Hdr  : pHdr,
-                NetPacket::s_rx.PatchHdr  ? NetPacket::s_rx.HdrLen : cbHdr,
-                NetPacket::s_rx.PatchBody ? NetPacket::s_rx.Body : pBody,
-                NetPacket::s_rx.PatchBody ? NetPacket::s_rx.BodyLen : cbBody, s_rxLock);
+            if (NetPacket::s_rx.Shrunk && NetPacket::s_rx.PatchHdr) {
+                NetPacket::s_rx.Replace(pPacket,
+                    NetPacket::s_rx.Hdr, NetPacket::s_rx.HdrLen,
+                    pBody, NetPacket::s_rx.NewBodySize);
+            } else if (NetPacket::s_rx.Shrunk) {
+                pPacket->m_cubData = sizeof(MsgHdr) + cbHdr + NetPacket::s_rx.NewBodySize;
+            } else if (NetPacket::s_rx.PatchHdr || NetPacket::s_rx.PatchBody) {
+                NetPacket::s_rx.Replace(pPacket,
+                    NetPacket::s_rx.PatchHdr  ? NetPacket::s_rx.Hdr  : pHdr,
+                    NetPacket::s_rx.PatchHdr  ? NetPacket::s_rx.HdrLen : cbHdr,
+                    NetPacket::s_rx.PatchBody ? NetPacket::s_rx.Body : pBody,
+                    NetPacket::s_rx.PatchBody ? NetPacket::s_rx.BodyLen : cbBody);
+            }
         }
     }
+
     return oRecvPkt(pThis, pPacket);
 }
 
@@ -267,10 +279,9 @@ namespace NetPacket {
 
 template<>
 uint8_t* PacketPool<true>::Replace(CNetPacket* p, const uint8_t* newHdr, uint32_t cbNewHdr,
-                                    const uint8_t* newBody, uint32_t cbNewBody, std::mutex& mtx) {
+                                    const uint8_t* newBody, uint32_t cbNewBody) {
     uint32_t newSize = sizeof(MsgHdr) + cbNewHdr + cbNewBody;
     if (newSize > sizeof(Frame[0])) return nullptr;
-    std::lock_guard<std::mutex> lock(mtx);
     uint8_t* buf = Frame[FrameIdx];
     const MsgHdr* orig = reinterpret_cast<const MsgHdr*>(p->m_pubData);
     MsgHdr* out = reinterpret_cast<MsgHdr*>(buf);
@@ -287,10 +298,9 @@ uint8_t* PacketPool<true>::Replace(CNetPacket* p, const uint8_t* newHdr, uint32_
 template<>
 uint8_t* PacketPool<false>::Build(const uint8_t* pubData, uint32_t cbHdr, const uint8_t* pHdr,
                                    const uint8_t* newBody, uint32_t cbNewBody,
-                                   uint32_t* pNewSize, std::mutex& mtx) {
+                                   uint32_t* pNewSize) {
     *pNewSize = sizeof(MsgHdr) + cbHdr + cbNewBody;
     if (*pNewSize > sizeof(Frame[0])) return nullptr;
-    std::lock_guard<std::mutex> lock(mtx);
     uint8_t* buf = Frame[FrameIdx];
     const MsgHdr* orig = reinterpret_cast<const MsgHdr*>(pubData);
     MsgHdr* out = reinterpret_cast<MsgHdr*>(buf);

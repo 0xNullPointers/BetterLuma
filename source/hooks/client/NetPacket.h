@@ -47,10 +47,10 @@ public:
     int      FrameIdx = 0;
 
     uint8_t* Replace(CNetPacket* p, const uint8_t* newHdr, uint32_t cbNewHdr,
-                     const uint8_t* newBody, uint32_t cbNewBody, std::mutex& mtx);
+                     const uint8_t* newBody, uint32_t cbNewBody);
     uint8_t* Build(const uint8_t* pubData, uint32_t cbHdr, const uint8_t* pHdr,
                    const uint8_t* newBody, uint32_t cbNewBody,
-                   uint32_t* pNewSize, std::mutex& mtx);
+                   uint32_t* pNewSize);
 };
 
 extern PacketPool<true>  s_rx;
