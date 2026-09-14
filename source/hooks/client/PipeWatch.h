@@ -53,6 +53,7 @@ namespace PipeWatch {
     void OnHandshake(CSteamPipeClient* pipe, CUtlBuffer* pRead);
     void TouchPipe(CSteamPipeClient* pipe);
 
+    // Restore PipeWatch interface to cdf5c42 without redundant handle-lookup extensions.
     std::optional<ProcessSnapshot> SnapshotForPipe(const CSteamPipeClient* pipe);
     AppId_t ResolveAppId(const CSteamPipeClient* pipe);
     bool IsLikelyGamePipe(const CSteamPipeClient* pipe);

@@ -30,19 +30,20 @@ namespace {
     static bool RewriteAchievementCallbackGameId(int iCallback, void* pCallbackData,
                                                  int cubCallbackData)
     {
-        AppId_t real = SteamCapture::OnlineFixRealAppId();
-        if (real == 0 || real == kOnlineFixAppId) return false;
+        // Support achievement callback GameId rewrite for any active OnlineFix route.
+        if (!SteamCapture::HasActiveOnlineFixApps() && !SteamStubAuto::IsActive()) return false;
         if (cubCallbackData < static_cast<int>(sizeof(uint64_t))) return false;
         if (pCallbackData == nullptr) return false;
 
         auto* pGameId = static_cast<uint64_t*>(pCallbackData);
         AppId_t current = static_cast<AppId_t>(*pGameId & 0xFFFFFF);
-        if (current != real) return false;
+        if (current == 0 || current == kOnlineFixAppId) return false;
+        if (!SteamCapture::IsOnlineFixApp(current) && current != SteamStubAuto::RealAppId()) return false;
 
         *pGameId = (*pGameId & ~static_cast<uint64_t>(0xFFFFFF))
                  | static_cast<uint64_t>(kOnlineFixAppId);
         LOG_ONLINEFIX_DEBUG("GetAPICallResult achievement cb {} m_nGameID {} -> {}",
-                            iCallback, real, kOnlineFixAppId);
+                            iCallback, current, kOnlineFixAppId);
         return true;
     }
 

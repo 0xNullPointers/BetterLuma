@@ -116,18 +116,20 @@ namespace {
         return true;
     }
 
+    // Only redirect opted-in mask queries for Spacewar (480) masquerade, preserving other apps.
     LM_HOOK(OptedInMask, __int64, void* pThis, unsigned int appId) {
-        AppId_t realAppId = SteamCapture::ActiveRouteRealAppId();
-        const char* routeName = SteamCapture::OnlineFixRouteIsSteamStubAuto()
-            ? "steamstub-auto"
-            : SteamCapture::OnlineFixRouteModeName(SteamCapture::OnlineFixMode());
-        if (realAppId && appId != realAppId) {
-            LOG_MISC_TRACE("OptedInMask: routeMode={} appid {} -> {} (redirected)",
-                           routeName, appId, realAppId);
-            return oOptedInMask(pThis, realAppId);
+        if (appId == kOnlineFixAppId) {
+            AppId_t realAppId = SteamCapture::ActiveRouteRealAppId();
+            if (realAppId) {
+                const char* routeName = SteamCapture::OnlineFixRouteIsSteamStubAuto()
+                    ? "steamstub-auto"
+                    : SteamCapture::OnlineFixRouteModeName(SteamCapture::OnlineFixMode());
+                LOG_MISC_TRACE("OptedInMask: routeMode={} appid {} -> {} (redirected)",
+                               routeName, appId, realAppId);
+                return oOptedInMask(pThis, realAppId);
+            }
         }
-        LOG_MISC_TRACE("OptedInMask: routeMode={} appid {} (no redirect)",
-                       routeName, appId);
+        LOG_MISC_TRACE("OptedInMask: appid {} (no redirect)", appId);
         return oOptedInMask(pThis, appId);
     }
 

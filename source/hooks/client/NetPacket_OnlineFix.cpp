@@ -12,55 +12,107 @@
 namespace NetPacket::Handlers::OnlineFix {
 
 bool HandleSend(const uint8_t* pBody, uint32_t cbBody) {
-    AppId_t storedReal = SteamCapture::OnlineFixRealAppId();
-    SteamCapture::OnlineFixRouteMode routeMode = SteamCapture::OnlineFixMode();
-    if (routeMode == SteamCapture::OnlineFixRouteMode::None || storedReal == 0)
+    // Support multi-game OnlineFix presence without premature teardown.
+    if (!SteamCapture::HasActiveOnlineFixApps())
         return false;
 
     CMsgClientGamesPlayed msg;
     if (!msg.ParseFromArray(pBody, cbBody)) {
-        LOG_PKTRT_WARN("{{{{\"evt\":\"OnlineFix\",\"act\":\"send\",\"err\":\"parse-fail\"}}}}");
+        LOG_PKTRT_WARN("{{\"evt\":\"OnlineFix\",\"act\":\"send\",\"err\":\"parse-fail\"}}");
         return false;
     }
     LOG_PKTRT_DEBUG("{{\"evt\":\"OnlineFix\",\"act\":\"send\",\"original\":{}}}", msg.DebugString());
 
-    bool sawAny480 = false;
-    bool patched = false;
+    std::vector<const CMsgClientGamesPlayed::GamePlayed*> activeOnlineFixGames;
+    CMsgClientGamesPlayed::GamePlayed* fixGame = nullptr;
+
+    // Track active OnlineFix applications and guard against race-condition unregistration during game launch.
     for (int i = 0; i < msg.games_played_size(); ++i) {
         auto* game = msg.mutable_games_played(i);
         AppId_t appid = static_cast<AppId_t>(game->game_id() & UINT32_MAX);
-
-        if (appid == kOnlineFixAppId) {
-            sawAny480 = true;
-            AppId_t realAppId = storedReal;
-            if (!realAppId) {
-                LOG_PKTRT_WARN("{{{{\"evt\":\"OnlineFix\",\"act\":\"send\",\"err\":\"no-realid\"}}}}");
-                continue;
-            }
-            if (realAppId == kOnlineFixAppId) {
-                LOG_PKTRT_WARN("{{{{\"evt\":\"OnlineFix\",\"act\":\"send\",\"err\":\"already-480\",\"appId\":{}}}}}", realAppId);
-                continue;
-            }
-            std::string name = SteamCapture::GetGameNameByAppID(realAppId);
-            if (name.empty()) {
-                LOG_PKTRT_WARN("{{\"evt\":\"OnlineFix\",\"act\":\"send\",\"err\":\"no-name\",\"appId\":{}}}", realAppId);
-                continue;
-            }
-            game->set_game_extra_info(name);
-            patched = true;
-            LOG_PKTRT_INFO("{{\"evt\":\"OnlineFix\",\"act\":\"patch\",\"was\":480,\"name\":\"{}\",\"appId\":{}}}",
-                       name, realAppId);
-        } else if (storedReal && appid == storedReal) {
-            LOG_PKTRT_WARN("{{\"evt\":\"OnlineFix\",\"act\":\"send\",\"warn\":\"leaked\",\"routeMode\":\"{}\",\"appId\":{}}}",
-                           SteamCapture::OnlineFixRouteModeName(routeMode), appid);
+        if (SteamCapture::IsOnlineFixApp(appid)) {
+            activeOnlineFixGames.push_back(game);
+            SteamCapture::MarkOnlineFixAppSeen(appid);
+            LOG_PKTRT_INFO("{{\"evt\":\"OnlineFix\",\"act\":\"detect_active_game\",\"appId\":{},\"pid\":{}}}",
+                           appid, game->has_process_id() ? game->process_id() : 0);
+        } else if (appid == kOnlineFixAppId) {
+            fixGame = game;
         }
     }
 
-    if (!patched) {
-        if (sawAny480) {
-            LOG_PKTRT_DEBUG("{{{{\"evt\":\"OnlineFix\",\"act\":\"send\",\"info\":\"saw-480-no-patch\"}}}}");
+    bool patched = false;
+    if (!activeOnlineFixGames.empty()) {
+        // At least one OnlineFix game is currently running in Steam.
+        const auto* primaryGame = activeOnlineFixGames.back();
+        AppId_t primaryAppId = static_cast<AppId_t>(primaryGame->game_id() & UINT32_MAX);
+        std::string name = SteamCapture::GetGameNameByAppID(primaryAppId);
+
+        if (fixGame == nullptr) {
+            fixGame = msg.add_games_played();
+            fixGame->CopyFrom(*primaryGame);
+            fixGame->set_game_id(kOnlineFixAppId);
+            if (!name.empty()) {
+                fixGame->set_game_extra_info(name);
+            }
+            patched = true;
+            LOG_PKTRT_INFO("{{\"evt\":\"OnlineFix\",\"act\":\"add_480_presence\",\"name\":\"{}\",\"appId\":{},\"pid\":{},\"totalActive\":{}}}",
+                           name, primaryAppId, primaryGame->has_process_id() ? primaryGame->process_id() : 0,
+                           activeOnlineFixGames.size());
+        } else if (!name.empty() && fixGame->game_extra_info() != name) {
+            fixGame->set_game_extra_info(name);
+            patched = true;
+            LOG_PKTRT_INFO("{{\"evt\":\"OnlineFix\",\"act\":\"update_480_presence\",\"name\":\"{}\",\"appId\":{}}}",
+                           name, primaryAppId);
         }
-        return false;
+
+        // Clean up registered OnlineFix apps that have legitimately exited
+        auto registeredApps = SteamCapture::GetActiveOnlineFixApps();
+        for (AppId_t regId : registeredApps) {
+            bool found = false;
+            for (const auto* g : activeOnlineFixGames) {
+                if (static_cast<AppId_t>(g->game_id() & UINT32_MAX) == regId) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && SteamCapture::CanUnregisterOnlineFixApp(regId)) {
+                SteamCapture::UnregisterOnlineFixApp(regId);
+                LOG_PKTRT_INFO("{{\"evt\":\"OnlineFix\",\"act\":\"unregister_exited_app\",\"appId\":{},\"remaining\":{}}}",
+                               regId, activeOnlineFixGames.size());
+            }
+        }
+    } else {
+        // No registered OnlineFix games currently in msg. Only unregister if grace period passed or previously active.
+        auto registeredApps = SteamCapture::GetActiveOnlineFixApps();
+        bool anyPending = false;
+        for (AppId_t regId : registeredApps) {
+            if (SteamCapture::CanUnregisterOnlineFixApp(regId)) {
+                SteamCapture::UnregisterOnlineFixApp(regId);
+                LOG_PKTRT_INFO("{{\"evt\":\"OnlineFix\",\"act\":\"unregister_exited_app\",\"appId\":{}}}", regId);
+            } else {
+                anyPending = true;
+                LOG_PKTRT_DEBUG("{{\"evt\":\"OnlineFix\",\"act\":\"pending_grace_period\",\"appId\":{}}}", regId);
+            }
+        }
+        if (!anyPending) {
+            SteamCapture::SetOnlineFixRoute(0, SteamCapture::OnlineFixRouteMode::None);
+
+            if (fixGame != nullptr) {
+                CMsgClientGamesPlayed cleanedMsg;
+                for (int i = 0; i < msg.games_played_size(); ++i) {
+                    const auto& g = msg.games_played(i);
+                    if (static_cast<AppId_t>(g.game_id() & UINT32_MAX) != kOnlineFixAppId) {
+                        cleanedMsg.add_games_played()->CopyFrom(g);
+                    }
+                }
+                if (msg.has_client_os_type()) cleanedMsg.set_client_os_type(msg.client_os_type());
+                if (msg.has_cloud_gaming_platform()) cleanedMsg.set_cloud_gaming_platform(msg.cloud_gaming_platform());
+                if (msg.has_recent_reauthentication()) cleanedMsg.set_recent_reauthentication(msg.recent_reauthentication());
+                msg.Swap(&cleanedMsg);
+                patched = true;
+                LOG_PKTRT_INFO("{{\"evt\":\"OnlineFix\",\"act\":\"clear_480_presence\",\"reason\":\"all_exited\"}}");
+            }
+        }
     }
 
     s_tx.BodyLen = static_cast<uint32_t>(msg.ByteSizeLong());
@@ -69,7 +121,7 @@ bool HandleSend(const uint8_t* pBody, uint32_t cbBody) {
         return false;
     }
     if (!msg.SerializeToArray(s_tx.Body, kBodyCap)) {
-        LOG_PKTRT_WARN("{{{{\"evt\":\"OnlineFix\",\"act\":\"send\",\"err\":\"encode-fail\"}}}}");
+        LOG_PKTRT_WARN("{{\"evt\":\"OnlineFix\",\"act\":\"send\",\"err\":\"encode-fail\"}}");
         return false;
     }
 

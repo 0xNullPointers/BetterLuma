@@ -483,14 +483,15 @@ namespace {
         g_pipes[MakePipeKey(pipe)] = snap.key;
     }
 
+    // Support OnlineFix fallback payload injection for any active OnlineFix app.
     void MaybeInjectManualOnlineFixPayload(const PipeWatch::ProcessSnapshot& snap) {
         if (!snap.likelyGame || !snap.luaManaged || snap.steamProcess)
             return;
         if (SteamCapture::OnlineFixMode() != SteamCapture::OnlineFixRouteMode::ManualFlag)
             return;
 
-        const AppId_t realAppId = SteamCapture::OnlineFixRealAppId();
-        if (!realAppId || snap.appId != realAppId)
+        const AppId_t realAppId = snap.appId;
+        if (!realAppId || !SteamCapture::IsOnlineFixApp(realAppId))
             return;
 
         if (!snap.eosSdkModule) {

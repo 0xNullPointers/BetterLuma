@@ -43,7 +43,9 @@ namespace {
 
         uint8_t* base = pWrite->m_Memory.m_pMemory;
         AppId_t reported = *reinterpret_cast<const AppId_t*>(base + 1);
-        AppId_t real = steamStubRoute ? SteamStubAuto::RealAppId() : OnlineFixRealAppId();
+        // Support real AppId calculation with per-PID lookup fallback for multi-game OnlineFix.
+        AppId_t pidReal = SteamCapture::GetOnlineFixAppForPid(pid);
+        AppId_t real = steamStubRoute ? SteamStubAuto::RealAppId() : (pidReal ? pidReal : OnlineFixRealAppId());
         AppId_t finalAppId = reported;
         bool changed = false;
 

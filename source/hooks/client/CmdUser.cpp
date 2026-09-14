@@ -42,23 +42,23 @@ namespace {
 
     // File-local twin of the PackagePatch.cpp helper. Two copies live
     // file-local in the call sites (per project §13 small-surface rule)
-    // rather than sharing a header. Hidden-480 routes need this rewrite.
+    // Support achievement callback GameId rewrite for any active OnlineFix route or SteamStub DRM.
     static bool RewriteGameIdInCallback(int iCallback, void* pCallbackData,
                                         int cbCallbackData)
     {
-        AppId_t real = SteamCapture::ActiveRouteRealAppId();
-        if (real == 0 || real == kOnlineFixAppId) return false;
+        if (!SteamCapture::HasActiveOnlineFixApps() && !SteamStubAuto::IsActive()) return false;
         if (cbCallbackData < static_cast<int>(sizeof(uint64_t))) return false;
         if (pCallbackData == nullptr) return false;
 
         auto* pGameId = static_cast<uint64_t*>(pCallbackData);
         AppId_t current = static_cast<AppId_t>(*pGameId & 0xFFFFFF);
-        if (current != real) return false;
+        if (current == 0 || current == kOnlineFixAppId) return false;
+        if (!SteamCapture::IsOnlineFixApp(current) && current != SteamStubAuto::RealAppId()) return false;
 
         *pGameId = (*pGameId & ~static_cast<uint64_t>(0xFFFFFF))
                  | static_cast<uint64_t>(kOnlineFixAppId);
         LOG_USRCMD_DEBUG("\"event\" \"RewiteGameId\" \"cb\" {} \"gameId\" {}->{}",
-                         iCallback, real, kOnlineFixAppId);
+                         iCallback, current, kOnlineFixAppId);
         return true;
     }
 
@@ -411,6 +411,7 @@ namespace CmdUser::Utils {
             return;
         }
 
+        // Restore OnGetAppID resolution to cdf5c42 using active route real AppId.
         AppId_t realAppId = SteamStubAuto::IsActive()
             ? SteamStubAuto::RealAppId()
             : SteamCapture::ResolveAppId();
@@ -420,6 +421,10 @@ namespace CmdUser::Utils {
 
         if (realAppId
             && current != realAppId) {
+            // Keep 480 when networking sockets / P2P is active for cert match.
+            if (SteamCapture::ShouldReportOnlineFixAppId()) {
+                return;
+            }
             finalAppId = realAppId;
             *reinterpret_cast<AppId_t*>(pWrite->Base() + 1) = finalAppId;
             changed = true;
@@ -455,11 +460,11 @@ namespace CmdUser::Utils {
         return true;
     }
 
-    // ── Achievement-callback m_nGameID rewrite for GetAPICallResult ──
+    // Check if any OnlineFix or SteamStub title is active before rewriting callback result.
     static bool OnAchievementStatsResult(
         HSteamPipe pipe, CUtlBuffer* pWrite, int iCallback, uint32_t cubCallback)
     {
-        if (SteamCapture::ActiveRouteRealAppId() == 0) return false;
+        if (!SteamCapture::HasActiveOnlineFixApps() && !SteamStubAuto::IsActive()) return false;
         if (cubCallback < sizeof(uint64_t)) return false;
         const int32 minTotal = static_cast<int32>(2 + sizeof(uint64_t));
         if (pWrite->m_Put < minTotal) return false;

@@ -117,10 +117,10 @@ namespace {
     struct StatsGuard {
         bool m_active;
         HSteamPipe m_pipe;
-        StatsGuard(bool doActivate, HSteamPipe pipe) : m_active(doActivate), m_pipe(pipe) {
+        StatsGuard(bool doActivate, HSteamPipe pipe, AppId_t appId = 0) : m_active(doActivate), m_pipe(pipe) {
             if (m_active) {
                 SteamCapture::SetUserStatsContext(true);
-                SteamCapture::EnterStatsScope(m_pipe);
+                SteamCapture::EnterStatsScope(m_pipe, appId);
             }
         }
         ~StatsGuard() {
@@ -131,6 +131,7 @@ namespace {
         }
     };
 
+    // Restore RemoteStorage hooks to cdf5c42 using active route real AppId.
     LM_HOOK(IClientRemoteStorage_FileExists, bool, void* pThis, const char* pchFile)
     {
         uint32_t* pAppId = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(pThis) + 0x38);
@@ -167,7 +168,12 @@ namespace {
                     SteamCapture::NotifyNetworkingSocketsUsed();
                 if (iface == EIPCInterface::IClientRemoteStorage) {
                     uint32_t fHash = *reinterpret_cast<const uint32_t*>(raw + OFFSET_FUNC_HASH);
-                    AppId_t real = SteamCapture::ActiveRouteRealAppId();
+                    // Resolve targeted OnlineFix AppID for pipe process before active route fallback.
+                    AppId_t real = 0;
+                    if (auto* pClient = PipeForHandle(pServer, hPipe)) {
+                        real = SteamCapture::GetOnlineFixAppForPid(pClient->m_clientPID);
+                    }
+                    if (!real) real = SteamCapture::ActiveRouteRealAppId();
                     if (real && (fHash == 0x376E83D6 || fHash == 0xC69A678D || fHash == 0xA0F6FDBD)) {
                         DWORD steamId32 = 0;
                         HKEY hKey;
@@ -276,7 +282,11 @@ namespace {
         }
 
         auto f = SetupFrame(pServer, hPipe, pRead);
-        StatsGuard guard(f.statsCall, hPipe);
+        AppId_t statsAppId = 0;
+        if (f.statsCall && f.pipe) {
+            statsAppId = SteamCapture::GetOnlineFixAppForPid(f.pipe->m_clientPID);
+        }
+        StatsGuard guard(f.statsCall, hPipe, statsAppId);
 
         const bool ok = oIPCProcessMessage(pServer, hPipe, pRead, pWrite);
 

@@ -24,6 +24,20 @@ namespace SteamCapture {
         ManualFlag = 1,
     };
 
+    // Support multi-game OnlineFix routes and PID tracking.
+    void SetOnlineFixRoute(AppId_t realAppId, OnlineFixRouteMode mode);
+    void RegisterOnlineFixApp(AppId_t realAppId, OnlineFixRouteMode mode);
+    void MarkOnlineFixAppSeen(AppId_t realAppId);
+    bool CanUnregisterOnlineFixApp(AppId_t realAppId);
+    void UnregisterOnlineFixApp(AppId_t realAppId);
+    bool IsOnlineFixApp(AppId_t realAppId);
+    bool HasActiveOnlineFixApps();
+    std::vector<AppId_t> GetActiveOnlineFixApps();
+
+    void AssociateOnlineFixPid(uint32_t pid, AppId_t realAppId);
+    AppId_t GetOnlineFixAppForPid(uint32_t pid);
+    void DisassociateOnlineFixPid(uint32_t pid);
+
     void Install();
     void Uninstall();
 
@@ -67,9 +81,10 @@ namespace SteamCapture {
     // worker threads sharing an HSteamPipe value cannot bleed rewrites
     // across pipes that did not originate the user-stats call. StatsScopePipe
     // returns the current stamp under acquire ordering.
-    void EnterStatsScope(HSteamPipe pipe);
+    void EnterStatsScope(HSteamPipe pipe, AppId_t appId = 0);
     void LeaveStatsScope();
     HSteamPipe StatsScopePipe();
+    AppId_t StatsScopeAppId();
 
     // Get localized game name via GetAppDataFromAppInfo (cached).
     std::string GetGameNameByAppID(AppId_t appId);

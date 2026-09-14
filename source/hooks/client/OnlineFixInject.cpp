@@ -4,6 +4,7 @@
 // See <https://www.gnu.org/licenses/> for the full license text.
 
 #include "hooks/client/OnlineFixInject.h"
+#include "hooks/capture/RuntimeCapture.h"
 #include "hooks/Macros.h"
 #include "config/Settings.h"
 #include "runtime/HookStatus.h"
@@ -30,7 +31,8 @@ namespace {
         std::unordered_set<uint32_t> fallbackPids;
     };
 
-    PendingRoute g_pendingRoute;
+    // Support multi-game concurrent OnlineFix fallback routes.
+    std::unordered_map<AppId_t, PendingRoute> g_pendingRoutes;
 
     std::wstring LowerBasename(LPCWSTR path) {
         if (!path || !*path) return {};
@@ -108,29 +110,46 @@ namespace {
         std::wstring wide = WideFromUtf8(imageName);
         std::wstring key = LowerBasename(wide.c_str());
         std::lock_guard lk(g_queueLock);
-        if (!g_pendingRoute.appId) {
+        if (g_pendingRoutes.empty()) {
             LOG_ONLINEFIX_DEBUG("fallback skip appid={} pid={} exe={} reason=no-pending",
                                 expectedAppId, pid, NarrowPath(key));
             return 0;
         }
-        if (expectedAppId && g_pendingRoute.appId != expectedAppId) {
-            LOG_ONLINEFIX_WARN("fallback skip queued={} expected={} pid={} exe={} reason=appid-mismatch",
-                               g_pendingRoute.appId, expectedAppId, pid, NarrowPath(key));
+        PendingRoute* pRoute = nullptr;
+        if (expectedAppId) {
+            auto it = g_pendingRoutes.find(expectedAppId);
+            if (it != g_pendingRoutes.end()) pRoute = &it->second;
+        } else if (g_pendingRoutes.size() == 1) {
+            pRoute = &g_pendingRoutes.begin()->second;
+        } else {
+            for (auto& [id, r] : g_pendingRoutes) {
+                if (!r.fallbackPids.contains(pid)) {
+                    pRoute = &r;
+                    break;
+                }
+            }
+        }
+        if (!pRoute) {
+            LOG_ONLINEFIX_WARN("fallback skip expected={} pid={} exe={} reason=no-matching-route",
+                               expectedAppId, pid, NarrowPath(key));
             return 0;
         }
-        if (pid && g_pendingRoute.fallbackPids.contains(pid)) {
+        if (pid && pRoute->fallbackPids.contains(pid)) {
             LOG_ONLINEFIX_DEBUG("fallback skip appid={} pid={} exe={} reason=already-tried",
-                                g_pendingRoute.appId, pid, NarrowPath(key));
+                                pRoute->appId, pid, NarrowPath(key));
             return 0;
         }
-        if (pid)
-            g_pendingRoute.fallbackPids.insert(pid);
+        if (pid) {
+            pRoute->fallbackPids.insert(pid);
+            // Associate child process PID with its OnlineFix app for IPC and watcher resolution.
+            SteamCapture::AssociateOnlineFixPid(pid, pRoute->appId);
+        }
         LOG_ONLINEFIX_INFO("fallback route hit appid={} pid={} launch={} child={}",
-                           g_pendingRoute.appId, pid, NarrowPath(g_pendingRoute.launchExe),
+                           pRoute->appId, pid, NarrowPath(pRoute->launchExe),
                            NarrowPath(key));
-        HookStatus::RecordOnlineFixPayload(g_pendingRoute.appId, pid, NarrowPath(key),
+        HookStatus::RecordOnlineFixPayload(pRoute->appId, pid, NarrowPath(key),
                                            "fallback-claimed", "pipewatch-eos");
-        return g_pendingRoute.appId;
+        return pRoute->appId;
     }
 
     using CreateProcessW_t = BOOL(WINAPI*)(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES,
@@ -196,6 +215,10 @@ namespace {
         wchar_t wPayload[MAX_PATH] = {};
         MultiByteToWideChar(CP_ACP, 0, PayloadPath, -1, wPayload, MAX_PATH);
         bool injected = InjectPayload(pi->hProcess, wPayload);
+        // Associate newly spawned primary process PID with its OnlineFix app.
+        if (pi && pi->dwProcessId) {
+            SteamCapture::AssociateOnlineFixPid(pi->dwProcessId, appId);
+        }
         LOG_ONLINEFIX_INFO("appid={} pid={} payload {}", appId, pi->dwProcessId,
                            injected ? "loaded" : "FAILED");
         HookStatus::RecordOnlineFixPayload(appId, pi->dwProcessId,
@@ -283,7 +306,7 @@ namespace OnlineFixInject {
 
         std::lock_guard lk(g_queueLock);
         g_queue.clear();
-        g_pendingRoute = {};
+        g_pendingRoutes.clear();
     }
 
     void QueueInjection(const char* exePath, AppId_t realAppId) {
@@ -299,10 +322,11 @@ namespace OnlineFixInject {
 
         std::lock_guard lk(g_queueLock);
         g_queue[key] = realAppId;
-        g_pendingRoute = {};
-        g_pendingRoute.appId = realAppId;
-        g_pendingRoute.launchExe = key;
-        g_pendingRoute.queuedAt = GetTickCount64();
+        PendingRoute& route = g_pendingRoutes[realAppId];
+        route.appId = realAppId;
+        route.launchExe = key;
+        route.queuedAt = GetTickCount64();
+        route.fallbackPids.clear();
         LOG_ONLINEFIX_INFO("queued appid={} exe={}", realAppId, NarrowPath(key));
         HookStatus::RecordOnlineFixPayload(realAppId, 0, NarrowPath(key), "queued", "manual-route");
     }
@@ -313,7 +337,7 @@ namespace OnlineFixInject {
         std::wstring key = LowerBasename(wide.c_str());
 
         std::lock_guard lk(g_queueLock);
-        if (g_pendingRoute.appId != realAppId)
+        if (!g_pendingRoutes.contains(realAppId))
             return;
         HookStatus::RecordOnlineFixPayload(realAppId, pid, NarrowPath(key), "no-eos", "pipewatch");
     }

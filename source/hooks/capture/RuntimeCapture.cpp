@@ -19,8 +19,10 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace {
@@ -70,35 +72,82 @@ namespace {
     PVOID                 g_vehHandle          = nullptr;
     std::atomic<AppId_t>  g_OnlineFixRealAppId{0};
     std::atomic<uint32>   g_OnlineFixRouteMode{static_cast<uint32>(SteamCapture::OnlineFixRouteMode::None)};
-    // Pipe-scoped fine gate that pairs with the thread-local depth counter
-    // below. Stamped by EnterStatsScope on entry to an IClientUserStats IPC,
-    // cleared by LeaveStatsScope on exit. The achievement-callback rewrite
-    // path in PackagePatch.cpp and CmdUtils.cpp reads this under acquire
-    // ordering so cross-pipe bleed cannot land a rewrite on a pipe that did
-    // not originate the user-stats call.
     std::atomic<HSteamPipe> g_StatsScopePipe{0};
-    // Scoped real-appid override depth for IClientUserStats traffic.
-    // Thread-local so concurrent IPC pipes from worker threads don't bleed
-    // into each other. Incremented by SetUserStatsContext(true), decremented
-    // by SetUserStatsContext(false). Read by the GetAppIDForCurrentPipe
-    // detour to decide whether to return the real appid.
+    std::atomic<AppId_t>  g_StatsScopeAppId{0};
     thread_local uint32   g_userStatsAppIdOverrideDepth = 0;
     std::unordered_map<AppId_t, std::string> g_GameNameCache;
     static std::vector<CaptureEntry> g_captures;
+
+    // ── multi-game OnlineFix tracking ─────────────────────────────────────────
+    struct OnlineFixAppEntry {
+        AppId_t appId = 0;
+        SteamCapture::OnlineFixRouteMode mode = SteamCapture::OnlineFixRouteMode::None;
+        uint64_t registeredAt = 0;
+        bool seenInPacket = false;
+    };
+
+    std::mutex                                     g_onlineFixMutex;
+    std::unordered_map<AppId_t, OnlineFixAppEntry> g_onlineFixAppEntries;
+    std::unordered_map<uint32_t, AppId_t>          g_onlineFixPidToAppId;
+
+    static bool SafeReadUint64(const void* ptr, uint64_t& outVal) {
+        if (!ptr) return false;
+        __try {
+            outVal = *reinterpret_cast<const uint64_t*>(ptr);
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    // ── PID transfer bypass hook state (prevents detachment of single-process games) ──
+    uint8_t* g_pidTransferCheckTarget = nullptr;
+    uint8_t  g_pidTransferCheckOriginalBytes[6]{};
+
+    static uint8_t* FindPidTransferCheckSite(HMODULE hMod) {
+        if (!hMod) return nullptr;
+        auto* dos = reinterpret_cast<PIMAGE_DOS_HEADER>(hMod);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) return nullptr;
+        auto* nt = reinterpret_cast<PIMAGE_NT_HEADERS>(
+            reinterpret_cast<uint8_t*>(hMod) + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE) return nullptr;
+
+        auto* sec = IMAGE_FIRST_SECTION(nt);
+        for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec) {
+            if (!(sec->Characteristics & IMAGE_SCN_MEM_EXECUTE)) continue;
+            const uint8_t* start = reinterpret_cast<uint8_t*>(hMod) + sec->VirtualAddress;
+            const size_t size = sec->Misc.VirtualSize;
+            if (size < 16) continue;
+            const uint8_t* end = start + size - 16;
+            for (const uint8_t* p = start; p <= end; ++p) {
+                // Pattern at steamclient64 InternalUpdateClientGame:
+                // 48 39 07          cmp qword ptr [rdi], rax
+                // 0F 85 ?? ?? ?? ?? jne 0x9c3559
+                // 41 83 EE 01       sub r14d, 1
+                if (p[0] == 0x48 && p[1] == 0x39 && p[2] == 0x07 &&
+                    p[3] == 0x0F && p[4] == 0x85 &&
+                    p[9] == 0x41 && p[10] == 0x83 && p[11] == 0xEE && p[12] == 0x01) {
+                    LOG_MISC_INFO("FindPidTransferCheckSite: matched pattern @ RVA 0x{:X}",
+                                  static_cast<uintptr_t>((p + 3) - reinterpret_cast<uint8_t*>(hMod)));
+                    return const_cast<uint8_t*>(p + 3);
+                }
+            }
+        }
+        LOG_MISC_WARN("FindPidTransferCheckSite: pattern scan in executable sections found no match");
+        return nullptr;
+    }
 
     SteamCapture::OnlineFixRouteMode CurrentOnlineFixMode() {
         return static_cast<SteamCapture::OnlineFixRouteMode>(
             g_OnlineFixRouteMode.load(std::memory_order_acquire));
     }
 
-    void SetOnlineFixRoute(AppId_t realAppId, SteamCapture::OnlineFixRouteMode mode) {
-        g_OnlineFixRealAppId.store(realAppId, std::memory_order_release);
-        g_OnlineFixRouteMode.store(static_cast<uint32>(mode), std::memory_order_release);
-    }
-
     AppId_t ActiveRouteRealAppIdInternal() {
         if (SteamStubAuto::IsActive())
             return SteamStubAuto::RealAppId();
+        AppId_t statsId = g_StatsScopeAppId.load(std::memory_order_acquire);
+        if (statsId != 0)
+            return statsId;
         return g_OnlineFixRealAppId.load(std::memory_order_acquire);
     }
 
@@ -123,13 +172,16 @@ namespace {
                           reinterpret_cast<uint64_t>(pEngine));
         }
         AppId_t appid = oGetAppIDForCurrentPipe(pEngine);
-        if (g_userStatsAppIdOverrideDepth > 0
-            && ActiveRouteRealAppIdInternal() != 0
-            && appid == kOnlineFixAppId) {
-            AppId_t real = ActiveRouteRealAppIdInternal();
-            LOG_MISC_TRACE("GetAppIDForCurrentPipe: stats-scope override {} -> {}",
-                           appid, real);
-            return real;
+        AppId_t real = ActiveRouteRealAppIdInternal();
+        // OnlineFix 480 route handling: return 480 for all pipe traffic and only expose real in stats scope.
+        // Route through 480 for OnlineFix networking/lobbies while stats scope returns real appid.
+        if (real != 0 && (appid == real || appid == kOnlineFixAppId || SteamCapture::IsOnlineFixApp(appid))) {
+            if (g_userStatsAppIdOverrideDepth > 0) {
+                LOG_MISC_TRACE("GetAppIDForCurrentPipe: stats-scope override {} -> {}",
+                               appid, real);
+                return real;
+            }
+            return kOnlineFixAppId;
         }
         return appid;
     }
@@ -171,11 +223,12 @@ namespace {
         SteamCapture::OnlineFixRouteMode mode = CurrentOnlineFixMode();
         AppId_t onlineFixRealAppId = g_OnlineFixRealAppId.load(std::memory_order_acquire);
         AppId_t steamStubRealAppId = SteamStubAuto::RealAppId();
-        AppId_t realAppId = steamStubRealAppId ? steamStubRealAppId : onlineFixRealAppId;
         AppId_t overlayAppId = pOverlayCGameID
             ? static_cast<AppId_t>(*pOverlayCGameID & 0xFFFFFF) : 0;
         AppId_t cgameAppId = pCGameID
             ? static_cast<AppId_t>(*pCGameID & 0xFFFFFF) : 0;
+        AppId_t realAppId = steamStubRealAppId ? steamStubRealAppId :
+            (SteamCapture::IsOnlineFixApp(cgameAppId) ? cgameAppId : onlineFixRealAppId);
 
         uint64_t prevCGame = pCGameID ? *pCGameID : 0;
         uint64_t prevOverlay = pOverlayCGameID ? *pOverlayCGameID : 0;
@@ -200,6 +253,12 @@ namespace {
             patchedOverlay = true;
         }
 
+        // OnlineFix child environment needs SteamAppId=480 while Steam tracks real appid.
+        if (mode == SteamCapture::OnlineFixRouteMode::ManualFlag && pCGameID && realAppId) {
+            *pCGameID = (prevCGame & ~static_cast<uint64_t>(0xFFFFFF))
+                      | static_cast<uint64_t>(kOnlineFixAppId);
+        }
+
         if (SteamStubAuto::IsActive() && steamStubRealAppId) {
             LOG_MISC_INFO("BuildSpawnEnvBlock: steamstub-auto dedicated cgame kept {:#x}->{:#x} overlay {:#x}->{:#x} realAppId={} env=0x{:X}",
                           prevCGame, pCGameID ? *pCGameID : 0,
@@ -221,6 +280,11 @@ namespace {
         }
         __int64 result = oBuildSpawnEnvBlock(pThis, pCGameID, a3, env,
                                                pOverlayCGameID, a6, a7, a8, a9, a10, a11);
+
+        // Restore real CGameID so Steam client's SpawnProcess tracks realAppId.
+        if (mode == SteamCapture::OnlineFixRouteMode::ManualFlag && pCGameID) {
+            *pCGameID = prevCGame;
+        }
 
         if (realAppId && env) {
             const char* p = static_cast<const char*>(env);
@@ -476,11 +540,11 @@ namespace {
                                           : SteamCapture::OnlineFixRouteMode::None;
 
                 if (routeThrough480) {
-                    SetOnlineFixRoute(appId, routeMode);
-                    *pGameID = kOnlineFixAppId;
-                    LOG_MISC_INFO("SpawnProcess: 480 route active reason={} routeMode={} appid {} -> {}, real stored",
+                    SteamCapture::SetOnlineFixRoute(appId, routeMode);
+                    // Keep *pGameID as realAppId so Steam tracks process lifetime, UI Stop button, and playtime.
+                    LOG_MISC_INFO("SpawnProcess: OnlineFix route active reason={} routeMode={} appid={}, tracking real app",
                                   routeReason, SteamCapture::OnlineFixRouteModeName(routeMode),
-                                  appId, kOnlineFixAppId);
+                                  appId);
                     SyncLanguageToSpacewar(appId);
                     if (detectedSteamStub) {
                         SteamStubAuto::Arm(appId, exePath, probeSteamStub ? steamStubProbe.imagePath : "");
@@ -490,7 +554,7 @@ namespace {
                     }
                     OnlineFixInject::QueueInjection(exePath, appId);
                 } else if (steamStubAuto) {
-                    SetOnlineFixRoute(0, SteamCapture::OnlineFixRouteMode::None);
+                    SteamCapture::SetOnlineFixRoute(0, SteamCapture::OnlineFixRouteMode::None);
                     SteamStubAuto::Arm(appId, exePath, probeSteamStub ? steamStubProbe.imagePath : "");
                     *pGameID = kOnlineFixAppId;
                     LOG_MISC_INFO("SpawnProcess: SteamStubAuto active reason={} appid {} -> {}, CGameID stays 480, overlay resolves real ticketSource={} sourceAppId={} steamStubSource={} steamStubMethod={} matchedImage=\"{}\"",
@@ -505,7 +569,7 @@ namespace {
                                       appId);
                     }
                 } else {
-                    SetOnlineFixRoute(0, SteamCapture::OnlineFixRouteMode::None);
+                    SteamCapture::SetOnlineFixRoute(0, SteamCapture::OnlineFixRouteMode::None);
                     SteamStubAuto::Clear();
                     if (missingSteamStubTicket) {
                         LOG_MISC_WARN("SpawnProcess: steamstub-ticket-missing appid={} ticketPreflight={} ticketStatus={} ticketSource={}",
@@ -521,6 +585,54 @@ namespace {
                                    owned ? "owned " : "",
                                    !hasFlag && !autoSteamStubCandidate ? "no-flag " : "",
                                    routeThrough480 ? "(internal)" : "");
+                }
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
+            // PID transfer bypass: intercepts steamclient64 InternalUpdateClientGame (RVA 0x9C33E9).
+            // When an OnlineFix process initializes Steamworks with 480, Steam compares registering GameID 480
+            // against the existing tracked game CGameID (e.g. 3405340).
+            // At 0x9C33E9, 'jne 0x9C3559' jumps to remove the PID from the real game.
+            // By redirecting RIP to +6 (fallthrough to sub r14d, 1), Steam retains the PID in the real game
+            // while ALSO tracking it under 480! Playtime, Stop button, and multiplayer presence all stay alive!
+            if (g_pidTransferCheckTarget
+                && ctx->Rip == reinterpret_cast<uint64_t>(g_pidTransferCheckTarget)) {
+                uint64_t newGameId = 0;
+                SafeReadUint64(reinterpret_cast<const void*>(ctx->Rdi), newGameId);
+                AppId_t newAppId = static_cast<AppId_t>(newGameId & 0xFFFFFF);
+                uint64_t oldGameId = ctx->Rax;
+                AppId_t oldAppId = static_cast<AppId_t>(oldGameId & 0xFFFFFF);
+                uint32_t pid = static_cast<uint32_t>(ctx->R15);
+
+                int32_t disp = *reinterpret_cast<const int32_t*>(g_pidTransferCheckOriginalBytes + 2);
+                uint64_t jumpTarget = reinterpret_cast<uint64_t>(g_pidTransferCheckTarget + 6 + disp);
+                uint64_t fallthroughTarget = reinterpret_cast<uint64_t>(g_pidTransferCheckTarget + 6);
+
+                if (!oldAppId && pid) {
+                    oldAppId = SteamCapture::GetOnlineFixAppForPid(pid);
+                }
+                // Verify if the process switching to 480 is an active OnlineFix title.
+                bool isOnlineFixNew = (newAppId == kOnlineFixAppId);
+                bool isOnlineFixOld = SteamCapture::IsOnlineFixApp(oldAppId)
+                    || (pid && SteamCapture::GetOnlineFixAppForPid(pid) == oldAppId);
+
+                LOG_MISC_INFO("PidTransferCheck: hit! pid={} oldAppId={} (oldGameId={:#x}) newAppId={} (newGameId={:#x}) isOFNew={} isOFOld={}",
+                              pid, oldAppId, oldGameId, newAppId, newGameId, isOnlineFixNew, isOnlineFixOld);
+
+                if (isOnlineFixNew && isOnlineFixOld) {
+                    SteamCapture::AssociateOnlineFixPid(pid, oldAppId);
+                    LOG_MISC_INFO("PidTransferCheck: [BYPASS] OnlineFix PID {} switching to 480 from real AppId {} - preventing detachment! Continuing at +6 (0x{:X})",
+                                  pid, oldAppId, fallthroughTarget);
+                    ctx->Rip = fallthroughTarget;
+                    return EXCEPTION_CONTINUE_EXECUTION;
+                }
+
+                if (newGameId == oldGameId) {
+                    LOG_MISC_DEBUG("PidTransferCheck: [PASSTHROUGH] newGameId == oldGameId, fallthrough to 0x{:X}", fallthroughTarget);
+                    ctx->Rip = fallthroughTarget;
+                } else {
+                    LOG_MISC_DEBUG("PidTransferCheck: [PASSTHROUGH] newGameId != oldGameId, jumping to 0x{:X}", jumpTarget);
+                    ctx->Rip = jumpTarget;
                 }
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
@@ -565,7 +677,20 @@ namespace SteamCapture {
             LOG_MISC_WARN("SpawnProcess: ByteSearch returned null, VEH trap NOT armed");
         }
 
-        if (!g_captures.empty() || g_spawnProcessTarget)
+        g_pidTransferCheckTarget = FindPidTransferCheckSite(diversion_hModule);
+        if (g_pidTransferCheckTarget) {
+            memcpy(g_pidTransferCheckOriginalBytes, g_pidTransferCheckTarget, sizeof(g_pidTransferCheckOriginalBytes));
+            LOG_MISC_INFO("PidTransferCheck: VEH trap armed @ 0x{:X}, orig bytes: {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
+                          reinterpret_cast<uintptr_t>(g_pidTransferCheckTarget),
+                          g_pidTransferCheckOriginalBytes[0], g_pidTransferCheckOriginalBytes[1],
+                          g_pidTransferCheckOriginalBytes[2], g_pidTransferCheckOriginalBytes[3],
+                          g_pidTransferCheckOriginalBytes[4], g_pidTransferCheckOriginalBytes[5]);
+            VehUtil::ArmInt3(g_pidTransferCheckTarget);
+        } else {
+            LOG_MISC_WARN("PidTransferCheck: target not found, PID transfer bypass disabled");
+        }
+
+        if (!g_captures.empty() || g_spawnProcessTarget || g_pidTransferCheckTarget)
             g_vehHandle = AddVectoredExceptionHandler(1, VehHandler);
 
         // Hook MarkLicenseAsChanged and GetPackageInfo with Detours to capture
@@ -595,6 +720,11 @@ namespace SteamCapture {
         if (g_spawnProcessTarget && *g_spawnProcessTarget == 0xCC)
             VehUtil::RestoreByte(g_spawnProcessTarget, 0x48);
         g_spawnProcessTarget = nullptr;
+
+        if (g_pidTransferCheckTarget && *g_pidTransferCheckTarget == 0xCC)
+            VehUtil::RestoreByte(g_pidTransferCheckTarget, g_pidTransferCheckOriginalBytes[0]);
+        g_pidTransferCheckTarget = nullptr;
+        memset(g_pidTransferCheckOriginalBytes, 0, sizeof(g_pidTransferCheckOriginalBytes));
 
         LM_TX_BEGIN();
         LM_REMOVE(GetAppIDForCurrentPipe);
@@ -648,6 +778,142 @@ namespace SteamCapture {
         return CurrentOnlineFixMode();
     }
 
+    // Track multi-game OnlineFix lifecycle, packet heartbeat grace periods, and PID associations.
+    void RegisterOnlineFixApp(AppId_t realAppId, OnlineFixRouteMode mode) {
+        if (!realAppId) return;
+        std::scoped_lock lock(g_onlineFixMutex);
+        auto& entry = g_onlineFixAppEntries[realAppId];
+        entry.appId = realAppId;
+        entry.mode = mode;
+        entry.registeredAt = GetTickCount64();
+        entry.seenInPacket = false;
+        g_OnlineFixRealAppId.store(realAppId, std::memory_order_release);
+        g_OnlineFixRouteMode.store(static_cast<uint32>(mode), std::memory_order_release);
+        LOG_MISC_INFO("OnlineFix: registered realAppId={} mode={} (total active: {})",
+                      realAppId, OnlineFixRouteModeName(mode), g_onlineFixAppEntries.size());
+    }
+
+    void MarkOnlineFixAppSeen(AppId_t realAppId) {
+        if (!realAppId) return;
+        std::scoped_lock lock(g_onlineFixMutex);
+        auto it = g_onlineFixAppEntries.find(realAppId);
+        if (it != g_onlineFixAppEntries.end()) {
+            if (!it->second.seenInPacket) {
+                it->second.seenInPacket = true;
+                LOG_MISC_INFO("OnlineFix: appid {} confirmed active in games played packet", realAppId);
+            }
+        }
+    }
+
+    bool CanUnregisterOnlineFixApp(AppId_t realAppId) {
+        if (!realAppId) return true;
+        std::scoped_lock lock(g_onlineFixMutex);
+        auto it = g_onlineFixAppEntries.find(realAppId);
+        if (it == g_onlineFixAppEntries.end()) return true;
+        if (it->second.seenInPacket) return true;
+        uint64_t elapsed = GetTickCount64() - it->second.registeredAt;
+        if (elapsed > 20000) {
+            LOG_MISC_WARN("OnlineFix: appid {} never appeared in games played packet, grace period expired ({}ms)",
+                          realAppId, elapsed);
+            return true;
+        }
+        return false;
+    }
+
+    void UnregisterOnlineFixApp(AppId_t realAppId) {
+        if (!realAppId) return;
+        std::scoped_lock lock(g_onlineFixMutex);
+        g_onlineFixAppEntries.erase(realAppId);
+        for (auto it = g_onlineFixPidToAppId.begin(); it != g_onlineFixPidToAppId.end();) {
+            if (it->second == realAppId) it = g_onlineFixPidToAppId.erase(it);
+            else ++it;
+        }
+        if (g_OnlineFixRealAppId.load(std::memory_order_acquire) == realAppId) {
+            AppId_t fallback = g_onlineFixAppEntries.empty() ? 0 : g_onlineFixAppEntries.begin()->first;
+            g_OnlineFixRealAppId.store(fallback, std::memory_order_release);
+            if (!fallback) {
+                g_OnlineFixRouteMode.store(static_cast<uint32>(OnlineFixRouteMode::None), std::memory_order_release);
+            } else {
+                g_OnlineFixRouteMode.store(static_cast<uint32>(g_onlineFixAppEntries.begin()->second.mode), std::memory_order_release);
+            }
+        }
+        LOG_MISC_INFO("OnlineFix: unregistered realAppId={} (remaining active: {})",
+                      realAppId, g_onlineFixAppEntries.size());
+    }
+
+    bool IsOnlineFixApp(AppId_t realAppId) {
+        if (!realAppId) return false;
+        std::scoped_lock lock(g_onlineFixMutex);
+        return g_onlineFixAppEntries.find(realAppId) != g_onlineFixAppEntries.end()
+            || g_OnlineFixRealAppId.load(std::memory_order_acquire) == realAppId;
+    }
+
+    bool HasActiveOnlineFixApps() {
+        std::scoped_lock lock(g_onlineFixMutex);
+        return !g_onlineFixAppEntries.empty() || g_OnlineFixRealAppId.load(std::memory_order_acquire) != 0;
+    }
+
+    std::vector<AppId_t> GetActiveOnlineFixApps() {
+        std::scoped_lock lock(g_onlineFixMutex);
+        std::vector<AppId_t> result;
+        result.reserve(g_onlineFixAppEntries.size());
+        for (const auto& [id, _] : g_onlineFixAppEntries) {
+            result.push_back(id);
+        }
+        if (result.empty()) {
+            AppId_t id = g_OnlineFixRealAppId.load(std::memory_order_acquire);
+            if (id) result.push_back(id);
+        }
+        return result;
+    }
+
+    void AssociateOnlineFixPid(uint32_t pid, AppId_t realAppId) {
+        if (!pid || !realAppId) return;
+        std::scoped_lock lock(g_onlineFixMutex);
+        g_onlineFixPidToAppId[pid] = realAppId;
+        if (g_onlineFixAppEntries.find(realAppId) == g_onlineFixAppEntries.end()) {
+            auto& entry = g_onlineFixAppEntries[realAppId];
+            entry.appId = realAppId;
+            entry.mode = OnlineFixRouteMode::ManualFlag;
+            entry.registeredAt = GetTickCount64();
+            entry.seenInPacket = false;
+        }
+        LOG_MISC_INFO("OnlineFix: associated PID {} -> realAppId {}", pid, realAppId);
+    }
+
+    AppId_t GetOnlineFixAppForPid(uint32_t pid) {
+        if (!pid) return 0;
+        std::scoped_lock lock(g_onlineFixMutex);
+        auto it = g_onlineFixPidToAppId.find(pid);
+        if (it != g_onlineFixPidToAppId.end()) return it->second;
+        return 0;
+    }
+
+    void DisassociateOnlineFixPid(uint32_t pid) {
+        if (!pid) return;
+        std::scoped_lock lock(g_onlineFixMutex);
+        auto it = g_onlineFixPidToAppId.find(pid);
+        if (it != g_onlineFixPidToAppId.end()) {
+            LOG_MISC_DEBUG("OnlineFix: disassociated PID {} (was realAppId {})", pid, it->second);
+            g_onlineFixPidToAppId.erase(it);
+        }
+    }
+
+    void SetOnlineFixRoute(AppId_t realAppId, OnlineFixRouteMode mode) {
+        if (realAppId != 0 && mode != OnlineFixRouteMode::None) {
+            RegisterOnlineFixApp(realAppId, mode);
+        } else if (realAppId == 0) {
+            std::scoped_lock lock(g_onlineFixMutex);
+            g_onlineFixAppEntries.clear();
+            g_onlineFixPidToAppId.clear();
+            g_OnlineFixRealAppId.store(0, std::memory_order_release);
+            g_OnlineFixRouteMode.store(static_cast<uint32>(OnlineFixRouteMode::None), std::memory_order_release);
+            LOG_MISC_INFO("OnlineFix: route reset to none");
+        } else {
+            UnregisterOnlineFixApp(realAppId);
+        }
+    }
+
     bool OnlineFixRouteIsSteamStubAuto() {
         return SteamStubAuto::IsActive();
     }
@@ -670,16 +936,24 @@ namespace SteamCapture {
         }
     }
 
-    void EnterStatsScope(HSteamPipe pipe) {
+    void EnterStatsScope(HSteamPipe pipe, AppId_t appId) {
         g_StatsScopePipe.store(pipe, std::memory_order_release);
+        if (appId != 0) {
+            g_StatsScopeAppId.store(appId, std::memory_order_release);
+        }
     }
 
     void LeaveStatsScope() {
         g_StatsScopePipe.store(0, std::memory_order_release);
+        g_StatsScopeAppId.store(0, std::memory_order_release);
     }
 
     HSteamPipe StatsScopePipe() {
         return g_StatsScopePipe.load(std::memory_order_acquire);
+    }
+
+    AppId_t StatsScopeAppId() {
+        return g_StatsScopeAppId.load(std::memory_order_acquire);
     }
 
     void EnsureBufferSize(CUtlBuffer* pWrite, int32 size)
