@@ -241,6 +241,84 @@ namespace {
         return true;
     }
 
+    // Retargets hardcoded "steamclient64.dll" module references inside cloud_redirect.dll
+    // to LumaCore's diversion module "lcoverlay.dll". This allows CloudRedirect's built-in
+    // RTTI scanner and prologue validator to discover CClientUnifiedServiceTransport on
+    // lcoverlay.dll and install in-memory vtable hooks directly (0ms latency, full offline support).
+    // If scanning finds no matches (e.g. future CloudRedirect changes), it logs a diagnostic
+    // notice and cleanly falls back to the asynchronous wire pass-through path.
+    static void PatchModuleReferences(HMODULE hModule) {
+        if (!hModule) return;
+
+        auto base = reinterpret_cast<const uint8_t*>(hModule);
+        auto dos  = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) return;
+        auto nt   = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE) return;
+
+        // Exact 18-byte ANSI sequence: "steamclient64.dll\0" (17 chars + null terminator)
+        // Replaced with "lcoverlay.dll\0\0\0\0\0" (13 chars + 5 null terminators = 18 bytes)
+        static constexpr char kTargetAnsi[]  = "steamclient64.dll";
+        static constexpr char kReplaceAnsi[] = "lcoverlay.dll\0\0\0\0";
+        static_assert(sizeof(kTargetAnsi) == sizeof(kReplaceAnsi), "ANSI size mismatch");
+        static_assert(sizeof(kTargetAnsi) == 18, "ANSI target must be 18 bytes");
+
+        // Exact 36-byte WIDE sequence: L"steamclient64.dll\0" (17 wchar_t + null terminator)
+        // Replaced with L"lcoverlay.dll\0\0\0\0\0" (13 wchar_t + 5 null terminators = 36 bytes)
+        static constexpr wchar_t kTargetWide[]  = L"steamclient64.dll";
+        static constexpr wchar_t kReplaceWide[] = L"lcoverlay.dll\0\0\0\0";
+        static_assert(sizeof(kTargetWide) == sizeof(kReplaceWide), "WIDE size mismatch");
+        static_assert(sizeof(kTargetWide) == 36, "WIDE target must be 36 bytes");
+
+        uint32_t patchedAnsi = 0;
+        uint32_t patchedWide = 0;
+
+        auto section = IMAGE_FIRST_SECTION(nt);
+        for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+            // Scan read-only data (.rdata) and general data (.data) sections
+            const bool isRdata = (memcmp(section->Name, ".rdata", 6) == 0);
+            const bool isData  = (memcmp(section->Name, ".data", 5) == 0);
+            if (!isRdata && !isData) continue;
+
+            uint8_t* secStart = const_cast<uint8_t*>(base + section->VirtualAddress);
+            const size_t secSize = section->Misc.VirtualSize > 0 ? section->Misc.VirtualSize : section->SizeOfRawData;
+            if (!secStart || secSize < sizeof(kTargetAnsi)) continue;
+
+            // 1. Scan for ANSI matches
+            for (size_t off = 0; off + sizeof(kTargetAnsi) <= secSize; ++off) {
+                if (memcmp(secStart + off, kTargetAnsi, sizeof(kTargetAnsi)) == 0) {
+                    DWORD oldProtect = 0;
+                    if (VirtualProtect(secStart + off, sizeof(kTargetAnsi), PAGE_READWRITE, &oldProtect)) {
+                        memcpy(secStart + off, kReplaceAnsi, sizeof(kTargetAnsi));
+                        VirtualProtect(secStart + off, sizeof(kTargetAnsi), oldProtect, &oldProtect);
+                        FlushInstructionCache(GetCurrentProcess(), secStart + off, sizeof(kTargetAnsi));
+                        patchedAnsi++;
+                    }
+                }
+            }
+
+            // 2. Scan for WIDE matches (2-byte aligned)
+            for (size_t off = 0; off + sizeof(kTargetWide) <= secSize; off += 2) {
+                if (memcmp(secStart + off, kTargetWide, sizeof(kTargetWide)) == 0) {
+                    DWORD oldProtect = 0;
+                    if (VirtualProtect(secStart + off, sizeof(kTargetWide), PAGE_READWRITE, &oldProtect)) {
+                        memcpy(secStart + off, kReplaceWide, sizeof(kTargetWide));
+                        VirtualProtect(secStart + off, sizeof(kTargetWide), oldProtect, &oldProtect);
+                        FlushInstructionCache(GetCurrentProcess(), secStart + off, sizeof(kTargetWide));
+                        patchedWide++;
+                    }
+                }
+            }
+        }
+
+        if (patchedAnsi > 0 || patchedWide > 0) {
+            LOG_INFO("CloudRedirect: retargeted {} ANSI and {} WIDE module reference(s) to lcoverlay.dll",
+                     patchedAnsi, patchedWide);
+        } else {
+            LOG_WARN("CloudRedirect: module targets not found in .rdata/.data; fallback to packet-layer path active");
+        }
+    }
+
     std::vector<uint32_t> CollectAllUnlockedApps() {
         std::unordered_set<uint32_t> set;
         for (AppId_t id : LuaLoader::GetAllDepotIds()) {
@@ -281,6 +359,8 @@ namespace CloudRedirectHost {
             LOG_WARN("CloudRedirect: failed to load {} (err={})", libPath.string(), GetLastError());
             return;
         }
+
+        PatchModuleReferences(g_module);
 
         bool ok = true;
         ok &= ResolveSymbol(g_module, "CR_InitCloudSave",  g_initCloudSave);
