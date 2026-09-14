@@ -74,15 +74,16 @@ namespace {
 
     std::wstring WideFromUtf8(std::string_view text) {
         if (text.empty()) return {};
-        int needed = MultiByteToWideChar(CP_UTF8, 0, text.data(),
+        int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
                                          static_cast<int>(text.size()),
                                          nullptr, 0);
         if (needed > 0) {
             std::wstring out(static_cast<size_t>(needed), L'\0');
-            MultiByteToWideChar(CP_UTF8, 0, text.data(),
-                                static_cast<int>(text.size()),
-                                out.data(), needed);
-            return out;
+            if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                                    static_cast<int>(text.size()),
+                                    out.data(), needed) > 0) {
+                return out;
+            }
         }
         needed = MultiByteToWideChar(CP_ACP, 0, text.data(),
                                      static_cast<int>(text.size()),
