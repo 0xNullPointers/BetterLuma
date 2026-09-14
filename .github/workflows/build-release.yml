@@ -1,0 +1,200 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - master
+      - main
+      - changes-A
+      - bug-fixesA
+  pull_request:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v0.1 or v0.4)'
+        required: false
+        default: 'v0.1'
+      publish_release:
+        description: 'Publish as GitHub Release'
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build, Package & Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git for github-actions[bot]
+        shell: bash
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Resolve Release Version
+        id: version
+        shell: pwsh
+        run: |
+          $ver = ""
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.version }}") {
+              $ver = "${{ inputs.version }}"
+          } elseif ("${{ github.ref_type }}" -eq "tag") {
+              $ver = "${{ github.ref_name }}"
+          } else {
+              # Fallback: extract highest version from CHANGELOG.md / changelog.md or default to v0.1
+              $changelogPath = if (Test-Path "CHANGELOG.md") { "CHANGELOG.md" } elseif (Test-Path "changelog.md") { "changelog.md" } else { $null }
+              if ($changelogPath) {
+                  $match = (Get-Content $changelogPath | Select-String -Pattern '^##\s*(v[0-9]+\.[0-9]+(\.[0-9]+)?)') | Select-Object -First 1
+                  if ($match) {
+                      $ver = $match.Matches[0].Groups[1].Value
+                  }
+              }
+              if (-not $ver) {
+                  $ver = "v0.1"
+              }
+          }
+          Write-Host "Resolved release version: $ver"
+          "RELEASE_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build Debug and Release DLLs
+        shell: cmd
+        run: |
+          call build.bat --no-pause
+
+      - name: Package DLLs into Zip Archives & Generate Checksums
+        shell: pwsh
+        run: |
+          # Verify compiled binaries exist
+          if (-not (Test-Path "Releases/Release/LumaCore.dll")) {
+              throw "Releases/Release/LumaCore.dll was not generated!"
+          }
+          if (-not (Test-Path "Releases/Debug/LumaCore.dll")) {
+              throw "Releases/Debug/LumaCore.dll was not generated!"
+          }
+
+          # Package Release DLLs
+          tar -a -c -f "Releases/Release.zip" -C "Releases/Release" LumaCore.dll dwmapi.dll xinput1_4.dll LumaCorePayload.dll
+          Write-Host "Created Releases/Release.zip"
+
+          # Package Debug DLLs
+          tar -a -c -f "Releases/Debug.zip" -C "Releases/Debug" LumaCore.dll dwmapi.dll xinput1_4.dll LumaCorePayload.dll
+          Write-Host "Created Releases/Debug.zip"
+
+          # Compute SHA-256 Checksums (Industry standard for binary release verification)
+          $relHash = (Get-FileHash -Algorithm SHA256 "Releases/Release.zip").Hash.ToLower()
+          $debHash = (Get-FileHash -Algorithm SHA256 "Releases/Debug.zip").Hash.ToLower()
+          "$relHash  Release.zip`n$debHash  Debug.zip" | Out-File -FilePath "Releases/SHA256SUMS.txt" -Encoding ascii
+          Write-Host "Generated Releases/SHA256SUMS.txt:"
+          Get-Content "Releases/SHA256SUMS.txt"
+
+      - name: Prepare Release Notes
+        shell: pwsh
+        run: |
+          $ver = $env:RELEASE_VERSION
+          $repo = "${{ github.repository }}"
+          $server = "${{ github.server_url }}"
+          $changelogUrl = "$server/$repo/blob/$ver/CHANGELOG.md"
+          $footer = "For detailed changelog refer to the [CHANGELOG.md]($changelogUrl)"
+
+          $changelogPath = if (Test-Path "CHANGELOG.md") { "CHANGELOG.md" } elseif (Test-Path "changelog.md") { "changelog.md" } else { $null }
+          $extractedNotes = ""
+
+          if ($changelogPath) {
+              $lines = Get-Content -Path $changelogPath
+              $recording = $false
+              $extractedList = [System.Collections.Generic.List[string]]::new()
+
+              foreach ($line in $lines) {
+                  if ($line -match "^##\s+$([regex]::Escape($ver))\b") {
+                      $recording = $true
+                      continue
+                  }
+                  if ($recording -and $line -match "^##\s+v") {
+                      break
+                  }
+                  if ($recording) {
+                      $extractedList.Add($line)
+                  }
+              }
+              $extractedNotes = ($extractedList -join "`n").Trim()
+          }
+
+          if ($extractedNotes) {
+              $body = "$extractedNotes`n`n---`n$footer"
+          } else {
+              $body = $footer
+          }
+
+          $body | Out-File -FilePath "release_notes.md" -Encoding utf8
+          Write-Host "Generated release_notes.md:"
+          Get-Content "release_notes.md"
+
+      - name: Upload Release Archive Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Release-DLLs
+          path: Releases/Release.zip
+          retention-days: 14
+
+      - name: Upload Debug Archive Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Debug-DLLs
+          path: Releases/Debug.zip
+          retention-days: 14
+
+      - name: Upload SHA256 Checksums Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SHA256SUMS
+          path: Releases/SHA256SUMS.txt
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Publishing release $RELEASE_VERSION via GitHub CLI..."
+
+          if gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "Release $RELEASE_VERSION exists, updating notes and assets..."
+            gh release edit "$RELEASE_VERSION" --notes-file "release_notes.md"
+            gh release upload "$RELEASE_VERSION" \
+              "Releases/Release.zip" \
+              "Releases/Debug.zip" \
+              "Releases/SHA256SUMS.txt" \
+              --clobber
+          else
+            echo "Creating new release $RELEASE_VERSION..."
+            gh release create "$RELEASE_VERSION" \
+              "Releases/Release.zip" \
+              "Releases/Debug.zip" \
+              "Releases/SHA256SUMS.txt" \
+              --title "$RELEASE_VERSION" \
+              --notes-file "release_notes.md" \
+              --target "$GITHUB_SHA"
+          fi
