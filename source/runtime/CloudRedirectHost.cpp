@@ -143,25 +143,45 @@ namespace {
         }
     }
 
-    // Guard object tracking in-flight invocations to prevent unmapping while active
+    // Guard object tracking in-flight invocations and holding an OS module reference
+    // to guarantee the DLL physical memory pages cannot be unmapped while in use.
     struct InFlightGuard {
         std::atomic<int32_t>& counter;
+        HMODULE hModule = nullptr;
         bool valid = false;
 
         explicit InFlightGuard(std::atomic<int32_t>& c) : counter(c) {
+            if (!g_active.load(std::memory_order_acquire))
+                return;
+
             counter.fetch_add(1, std::memory_order_acq_rel);
-            if (g_active.load(std::memory_order_acquire)) {
-                valid = true;
-            } else {
+
+            if (g_active.load(std::memory_order_acquire) && g_module) {
+                HMODULE mod = nullptr;
+                if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                                       reinterpret_cast<LPCWSTR>(g_module), &mod)) {
+                    hModule = mod;
+                    valid = true;
+                }
+            }
+
+            if (!valid) {
                 counter.fetch_sub(1, std::memory_order_acq_rel);
             }
         }
 
         ~InFlightGuard() {
             if (valid) {
-                counter.fetch_sub(1, std::memory_order_release);
+                counter.fetch_sub(1, std::memory_order_acq_rel);
+                if (hModule) {
+                    FreeLibrary(hModule);
+                    hModule = nullptr;
+                }
             }
         }
+
+        InFlightGuard(const InFlightGuard&) = delete;
+        InFlightGuard& operator=(const InFlightGuard&) = delete;
     };
 
     void CloudNotify(int level, const char* title, const char* message) {
@@ -398,12 +418,18 @@ namespace CloudRedirectHost {
         std::lock_guard<std::mutex> lock(g_mutex);
         if (!g_active.exchange(false, std::memory_order_acq_rel)) return;
 
-        // Drain in-flight calls before unmapping module
-        for (int i = 0; i < 50 && g_inFlightCalls.load(std::memory_order_acquire) > 0; ++i) {
+        // Drain in-flight calls before invoking shutdown export or unmapping module
+        constexpr int kMaxDrainIterations = 200;
+        for (int i = 0; i < kMaxDrainIterations && g_inFlightCalls.load(std::memory_order_acquire) > 0; ++i) {
             Sleep(10);
         }
 
-        if (g_shutdownFn) SafeInvokeShutdown(g_shutdownFn);
+        int32_t remaining = g_inFlightCalls.load(std::memory_order_acquire);
+        if (remaining > 0) {
+            LOG_WARN("CloudRedirect: shutdown proceeding with {} in-flight call(s) still active; module will remain pinned until they complete", remaining);
+        } else if (g_shutdownFn) {
+            SafeInvokeShutdown(g_shutdownFn);
+        }
 
         g_initCloudSave      = nullptr;
         g_handleCloudRpc     = nullptr;
