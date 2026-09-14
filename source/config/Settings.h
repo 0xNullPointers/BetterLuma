@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #pragma once
 
@@ -56,7 +56,7 @@ namespace Settings {
     // [pattern_fetch] require_signed
     // When true, the pattern fetcher refuses every TOML body whose .sig
     // sidecar fails RSA-PSS-SHA256 verification against the LumaCore-
-    // embedded public key. The signature lives at <body_url>.sig — same
+    // embedded public key. The signature lives at <body_url>.sig - same
     // path with a ".sig" suffix appended. When false, we still verify and
     // log a warning on a missing/bad signature but installed entries from
     // unsigned legs are accepted for back-compat with pattern repos that

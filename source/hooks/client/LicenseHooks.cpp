@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "hooks/client/LicenseHooks.h"
 
@@ -211,7 +211,7 @@ namespace {
         return oGetRemoteStorageSyncState(pRemoteStorage, appId);
     }
 
-    // Hook for ConfigStore::GetBinary — intercepts depot decryption key fetches.
+    // Hook for ConfigStore::GetBinary - intercepts depot decryption key fetches.
     // The real binary signature is int32 f(void*, EConfigStore, const char*, char*, uint32)
     // verified from the published prologue at RVA 0x5B3870: "48 63 FA" = movsxd rdi, edx
     // confirms the second param is a 32-bit enum, not a pointer.

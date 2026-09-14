@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "hooks/capture/RuntimeCapture.h"
 #include "hooks/Macros.h"
@@ -55,7 +55,7 @@ namespace {
     // These replace the old VEH int3 captures for MarkLicenseAsChanged and
     // GetPackageInfo. Detours hooks fire on every call regardless of when they
     // were installed, so we capture pCUser and pCPackageInfo on the first
-    // natural Steam call after login — even if that happens after startup.
+    // natural Steam call after login - even if that happens after startup.
     void* g_pCUser        = nullptr;
     void* g_pCPackageInfo = nullptr;
     std::atomic<bool> g_startupInjectionDone{false};
@@ -324,7 +324,7 @@ namespace {
     }
 
     // ── GetPackageInfo Detours hook ───────────────────────────────────────────
-    // Captures pCPackageInfo (RCX = this) on first call — kept for NotifyLicenseChanged.
+    // Captures pCPackageInfo (RCX = this) on first call - kept for NotifyLicenseChanged.
     LM_HOOK(GetPackageInfo, PackageInfo*, void* pThis, uint32 packageId, int64 p3) {
         if (!g_pCPackageInfo) {
             g_pCPackageInfo = pThis;
@@ -748,7 +748,7 @@ namespace SteamCapture {
 
     AppId_t GetAppIDForCurrentPipe() {
         if (!g_steamEngine || !oGetAppIDForCurrentPipe) {
-            LOG_MISC_WARN("GetAppIDForCurrentPipe called before capture — returning 0");
+            LOG_MISC_WARN("GetAppIDForCurrentPipe called before capture - returning 0");
             return 0;
         }
         auto appid = oGetAppIDForCurrentPipe(g_steamEngine);

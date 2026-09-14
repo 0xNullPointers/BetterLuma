@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #pragma once
 
@@ -17,7 +17,7 @@
 // pre-baked one with 88500012. if the user set up a backend url via
 // seteticketurl() in their lua config, we POST {app_id, nonce} to it and
 // get back a fresh eticket + ownership ticket minted against a pool account.
-// if no url is set, returns empty — caller falls back to credential store.
+// if no url is set, returns empty - caller falls back to credential store.
 namespace EticketFetcher {
 
     std::optional<std::vector<uint8_t>> MintEticket(AppId_t appId, std::span<const uint8_t> nonce);

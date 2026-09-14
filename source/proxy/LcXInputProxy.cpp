@@ -1,9 +1,9 @@
-// LumaCore — Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
-// xinput1_4.dll HiJack Project — True Dynamic Wrapper (With Undocumented Ordinals)
+// xinput1_4.dll HiJack Project - True Dynamic Wrapper (With Undocumented Ordinals)
 
 #include <windows.h>
 #include <cstring>
@@ -39,7 +39,7 @@ static FARPROC o_103 = nullptr;   // XInputPowerOffController
 static FARPROC o_104 = nullptr;   // XInputGetBaseBusInformation
 static FARPROC o_108 = nullptr;   // XInputGetAudioDeviceIdsEx
 
-// ─── Core Initialisation — table-driven binding to real System32 XInput ──
+// ─── Core Initialisation - table-driven binding to real System32 XInput ──
 static std::once_flag g_initOnce;
 
 struct ExportSlot { FARPROC* target; const char* name; };
@@ -74,7 +74,7 @@ void LoadRealXInput()
         *sl.target = GetProcAddress(g_realXInput, sl.name);
 }
 
-// Each exported function calls this once — thread-safe, zero-cost after init
+// Each exported function calls this once - thread-safe, zero-cost after init
 void EnsureLoaded() { std::call_once(g_initOnce, LoadRealXInput); }
 
 // ─── Native Exports ──────────────────────────────────────────────────
@@ -173,7 +173,7 @@ BOOL LumaCoreLoad()
     const char* exeName = strrchr(exePath, '\\');
     exeName = exeName ? exeName + 1 : exePath;
     if (_stricmp(exeName, "steam.exe") != 0)
-        return TRUE;   // not Steam — let the proxy load, but don't inject
+        return TRUE;   // not Steam - let the proxy load, but don't inject
 
     if (GetModuleHandleA("LumaCore.dll"))
         return TRUE;   // already loaded by another proxy

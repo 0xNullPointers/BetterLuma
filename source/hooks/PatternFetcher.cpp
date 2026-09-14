@@ -1,7 +1,7 @@
-// LumaCore — Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "PatternFetcher.h"
 
@@ -53,7 +53,7 @@ namespace PatternFetcher {
         // gitflic mirror lives at midrags/steam-auto-pt on the pattern branch.
         // Per-file raw fetches are gated behind login on gitflic, so we go
         // through the public blob-info JSON API instead. The reply carries
-        // the file body in a "blobLines" array — each line is one element
+        // the file body in a "blobLines" array - each line is one element
         // with a "body" field. Stitch them with '\n' to rebuild the TOML.
         // Tested URL form: /api/project/<owner>/<repo>/blob?file=<path>&branch=<branch>
         // The response is JSON with a top-level "blobLines": [{"body": ...}, ...].
@@ -540,7 +540,7 @@ namespace PatternFetcher {
 
         std::string BuildGitflicUrl(const char* subdir, const std::string& sha) {
             // gitflic wants the file path URL-encoded but their API tolerates
-            // the bare slash — kept literal because every other character in
+            // the bare slash - kept literal because every other character in
             // the file path is hex (lower a-f, 0-9). Saves a percent-encoder.
             std::string out = "https://";
             out += kGitflicHost;
@@ -1063,7 +1063,7 @@ namespace PatternFetcher {
             LOG_MISC_DEBUG("PatternFetcher::LoadFor {}: cache write failed ({})",
                            subdir, werr);
             // Cache write is best-effort. A failed write does not invalidate
-            // the parsed entries we already hold — the next session will
+            // the parsed entries we already hold - the next session will
             // re-fetch from the network and try again.
         }
 

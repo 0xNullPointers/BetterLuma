@@ -1,7 +1,7 @@
-// LumaCorePayload — injected into game processes for EOS bridge.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "EpicOnlineBridge.h"
 #include "EpicOnlineTypes.h"
@@ -128,7 +128,7 @@ namespace EosBridge {
         DetourAttach(reinterpret_cast<PVOID*>(&oCreateLobby),   reinterpret_cast<PVOID>(hkCreateLobby));
         DetourAttach(reinterpret_cast<PVOID*>(&oJoinLobby),     reinterpret_cast<PVOID>(hkJoinLobby));
         DetourAttach(reinterpret_cast<PVOID*>(&oJoinLobbyById), reinterpret_cast<PVOID>(hkJoinLobbyById));
-        // retry commit up to 3 times with backoff — detours can transiently fail
+        // retry commit up to 3 times with backoff - detours can transiently fail
         // if steam is modifying the same code page during startup
         LONG err = NO_ERROR;
         for (int retry = 0; retry < 3; ++retry) {

@@ -1,7 +1,7 @@
-// LumaCore — Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "hooks/ui/StatusWriter.h"
 
@@ -117,7 +117,7 @@ namespace StatusWriter {
         if (!funcName) return;
         std::lock_guard<std::mutex> lk(g_mu);
         g_state.misses.insert(funcName);
-        // Don't erase from hits — a later successful retry takes precedence.
+        // Don't erase from hits - a later successful retry takes precedence.
     }
 
     void Flush() {

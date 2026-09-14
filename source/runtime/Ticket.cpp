@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "Ticket.h"
 #include "config/LuaLoader.h"
@@ -527,7 +527,7 @@ namespace Ticket {
     }
 
     // ════════════════════════════════════════════════════════════════
-    //  Active SteamID lookup — used for fabricating tickets and for
+    //  Active SteamID lookup - used for fabricating tickets and for
     //  detecting "user switched accounts since the cached ticket was
     //  written" cases.
     //
@@ -592,7 +592,7 @@ namespace Ticket {
             LOG_WARN("GetActiveSteamID64: ActiveUser invalid size={} type={}", size, type);
         }
 
-        // 2. Filesystem fallback — pick the most recently modified
+        // 2. Filesystem fallback - pick the most recently modified
         //    userdata\<accountid>\ folder. This survives Steam being
         //    closed at the moment we query.
         DWORD pathLen = MAX_PATH;
@@ -600,7 +600,7 @@ namespace Ticket {
         if (RegGetValueA(HKEY_CURRENT_USER, "Software\\Valve\\Steam", "SteamPath",
                          RRF_RT_REG_SZ, nullptr, steamPath, &pathLen) != ERROR_SUCCESS) {
             uint64_t cached = ReadCached();
-            LOG_DEBUG("GetActiveSteamID64: no ActiveUser, no SteamPath — fallback to cache=0x{:X}", cached);
+            LOG_DEBUG("GetActiveSteamID64: no ActiveUser, no SteamPath - fallback to cache=0x{:X}", cached);
             return cached;
         }
 
@@ -614,7 +614,7 @@ namespace Ticket {
         HANDLE hFind = FindFirstFileA(searchPattern, &fd);
         if (hFind == INVALID_HANDLE_VALUE) {
             uint64_t cached = ReadCached();
-            LOG_DEBUG("GetActiveSteamID64: no userdata folder at {} — fallback to cache=0x{:X}",
+            LOG_DEBUG("GetActiveSteamID64: no userdata folder at {} - fallback to cache=0x{:X}",
                       userdataPath, cached);
             return cached;
         }
@@ -641,7 +641,7 @@ namespace Ticket {
 
         if (bestAccountId == 0) {
             uint64_t cached = ReadCached();
-            LOG_DEBUG("GetActiveSteamID64: no userdata\\<accountid>\\ folders found — fallback to cache=0x{:X}",
+            LOG_DEBUG("GetActiveSteamID64: no userdata\\<accountid>\\ folders found - fallback to cache=0x{:X}",
                       cached);
             return cached;
         }
@@ -658,7 +658,7 @@ namespace Ticket {
     //
     //  This is a hand-curated, deliberately-small list. We only flag
     //  titles where we have direct evidence of error-54 reports against
-    //  LumaCore. The list is not security-sensitive — it only changes
+    //  LumaCore. The list is not security-sensitive - it only changes
     //  the wording of the diagnostic log line so users get a "try
     //  Steamless" hint instead of generic "ownership patched" output.
     // ════════════════════════════════════════════════════════════════
@@ -695,12 +695,12 @@ namespace Ticket {
     //  on modern Steam DRM titles. It does help older v1.5 / early v2
     //  wrappers and tools that only inspect the SteamID/AppID fields.
     //  Steamless on the .exe is the actual fix for v3 titles like
-    //  Teardown — this is just a best-effort fallback.
+    //  Teardown - this is just a best-effort fallback.
     // ════════════════════════════════════════════════════════════════
     std::vector<uint8_t> BuildMinimalAppTicket(AppId_t appId) {
         const uint64_t steamID = GetActiveSteamID64();
         if (steamID == 0) {
-            LOG_DEBUG("BuildMinimalAppTicket: AppId={} no active SteamID — skip", appId);
+            LOG_DEBUG("BuildMinimalAppTicket: AppId={} no active SteamID - skip", appId);
             return {};
         }
 
@@ -739,7 +739,7 @@ namespace Ticket {
 
         const uint64_t activeID = GetActiveSteamID64();
         if (activeID == 0) {
-            LOG_INFO("EnsureRegistryTicketsForApp: AppId={} no active user — skip", appId);
+            LOG_INFO("EnsureRegistryTicketsForApp: AppId={} no active user - skip", appId);
             result.action = TicketPreflightAction::Skipped;
             return result;
         }

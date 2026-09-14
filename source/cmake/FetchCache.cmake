@@ -1,6 +1,6 @@
 # Caches FetchContent's downloaded *source trees* at the repo root so they
 # survive a `rm -rf build/`. Done by setting FETCHCONTENT_SOURCE_DIR_<NAME>
-# to point at the cached copies — that skips FetchContent's populate step
+# to point at the cached copies - that skips FetchContent's populate step
 # entirely (no download, no subbuild), which is also what lets us share the
 # cache across generators (Ninja for the main project, VS for SteamAPIProxy)
 # without hitting the "generator mismatch in *-subbuild/" error.
@@ -11,7 +11,7 @@
 # First configure (cache empty): FETCHCONTENT_BASE_DIR is pinned so the
 # initial populate lands at the shared location.
 # Subsequent configures: FETCHCONTENT_SOURCE_DIR_<NAME> overrides take
-# precedence — populate is bypassed, subbuild + build live in the per-tree
+# precedence - populate is bypassed, subbuild + build live in the per-tree
 # default ${CMAKE_BINARY_DIR}/_deps and don't conflict across generators.
 #
 # Override the cache location at configure time:

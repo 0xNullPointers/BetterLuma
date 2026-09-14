@@ -1,7 +1,7 @@
-// LumaCore — Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #pragma once
 
@@ -11,7 +11,7 @@
 //
 // The popup is gated by Settings::diagnosticPopupEnabled (default
 // false). When enabled, ReportMissing() spawns a detached thread
-// that shows a MessageBoxA with the captured data — useful for
+// that shows a MessageBoxA with the captured data - useful for
 // users sharing diagnostics when a Steam update breaks dispatch.
 namespace BootDiag {
 
@@ -21,7 +21,7 @@ namespace BootDiag {
 
     // Show a non-blocking MessageBoxA popup on a detached thread.
     // Content includes the build ID and SHA captured above.
-    // This is a read-only diagnostic — never modifies user files.
+    // This is a read-only diagnostic - never modifies user files.
     void ReportMissing();
 
 } // namespace BootDiag

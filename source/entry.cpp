@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "entry.h"
 #include "hooks/CoreLoader.h"
@@ -162,7 +162,7 @@ static void DetectSteamBuildId() {
 // which means the per-module entry map MUST be populated before the install pass
 // runs. PatternFetcher::LoadFor does cache-first read, falls back to network on
 // cache miss, writes the body to <Steam>\lumacore\pattern\<sha>.toml on success,
-// and installs the parsed entries — all synchronously. We block InitThread on
+// and installs the parsed entries - all synchronously. We block InitThread on
 // it so the very first session after a fresh install actually picks up the TOML
 // and lands all hooks instead of racing the install pass against a detached
 // network worker. The Steam loader thread is not waiting on us; only the
@@ -195,7 +195,7 @@ static DWORD WINAPI InitThread(LPVOID param) {
     // Block until either the cached TOML for this build is installed or the
     // network fetcher landed a fresh one. If both fail (offline + no cache),
     // r.ok is false and the install pass below records every hook as missed
-    // without crashing — Steam stays alive, banner explains the situation.
+    // without crashing - Steam stays alive, banner explains the situation.
     PatternFetcher::PatternResult pcResult =
         PatternFetcher::LoadFor(diversion_hModule, "steamclient");
     LOG_INFO("PatternFetcher: steamclient sha={} entries={} ok={}",
@@ -206,7 +206,7 @@ static DWORD WINAPI InitThread(LPVOID param) {
     // ── Steamui leg ──────────────────────────────────────────────────────────
     // Same synchronous load when steamui.dll is already mapped. When the
     // loader has not mapped it yet, defer to SteamUI::LoadModuleWithPath
-    // (the diversion-loader hook) — that fires the moment Steam pulls
+    // (the diversion-loader hook) - that fires the moment Steam pulls
     // steamui in, and DispatchSteamUiPatternFetch runs the same LoadFor
     // path on that thread (still outside the loader lock).
     PatternFetcher::PatternResult puResult{};

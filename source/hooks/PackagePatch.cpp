@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "PackagePatch.h"
 #include "Macros.h"
@@ -65,13 +65,13 @@ namespace {
         return true;
     }
 
-    // Saved pointer to package 0's PackageInfo — captured from LoadPackage hook.
+    // Saved pointer to package 0's PackageInfo - captured from LoadPackage hook.
     // Used by DoStartupInjection to inject apps after hooks are fully installed.
     static PackageInfo* g_pPackage0 = nullptr;
 
     // Set to true once LoadPackage has injected our depot list into package 0.
     // Used by InjectIntoPackage0 to suppress redundant re-injection from
-    // DoStartupInjection — re-injecting causes each AppId to appear twice in
+    // DoStartupInjection - re-injecting causes each AppId to appear twice in
     // package 0's vector, which makes Steam report ExistInPackageNums >= 2 for
     // fake-owned apps, which makes CheckAppOwnership think the user genuinely
     // owns them, which makes HasDepot return false, which breaks every
@@ -121,7 +121,7 @@ namespace {
         if (pOwn && LuaLoader::HasDepot(appId)) {
             if (result && pOwn->ExistInPackageNums > 1
                 && pOwn->ReleaseState == EAppReleaseState::Released) {
-                // Actually owned — record so HasDepot excludes it going forward
+                // Actually owned - record so HasDepot excludes it going forward
                 LuaLoader::MarkOwned(appId);
                 LOG_PACKAGE_DEBUG("CheckAppOwnership: appId={} actually owned, marking", appId);
             } else {
@@ -138,7 +138,7 @@ namespace {
                 if (Ticket::IsKnownSteamDrmApp(appId)) {
                     LOG_PACKAGE_INFO("CheckAppOwnership: appId={} is a known Steam-DRM (Steam Stub) "
                                      "title. If launch fails with error 54, try Remove SteamStub "
-                                     "(Steamless) from SteaMidra — ownership patching alone is not "
+                                     "(Steamless) from SteaMidra - ownership patching alone is not "
                                      "enough for the wrapper's local ticket check.",
                                      appId);
                 }
@@ -217,7 +217,7 @@ namespace PackagePatch {
     // Called from RuntimeCapture after MarkLicenseAsChanged fires (post-login).
     // At that point g_pPackage0 is set and oCUtlMemoryGrow is resolved.
     //
-    // Early-out when LoadPackage already seeded the vector at process start —
+    // Early-out when LoadPackage already seeded the vector at process start -
     // injecting the same set twice doubles ExistInPackageNums for every app
     // and breaks ownership detection.  This branch only matters when Lua
     // parsing finished after the LoadPackage hook fired (race at startup).

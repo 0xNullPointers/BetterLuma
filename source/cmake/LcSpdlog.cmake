@@ -1,5 +1,5 @@
 # Defines spdlog::spdlog as a static library via FetchContent. Only intended
-# to be used in Debug builds — Release callers should compile with the LOG_*
+# to be used in Debug builds - Release callers should compile with the LOG_*
 # macros stubbed out (see src/Log.h) and avoid linking against this target.
 if(TARGET spdlog::spdlog)
     return()
@@ -8,7 +8,7 @@ endif()
 include(LcFetchCache)
 include(FetchContent)
 
-# spdlog uses its bundled fmt by default — that's what we want here so we
+# spdlog uses its bundled fmt by default - that's what we want here so we
 # don't need a separate fmt fetch.
 set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(SPDLOG_FMT_EXTERNAL OFF CACHE BOOL "" FORCE)

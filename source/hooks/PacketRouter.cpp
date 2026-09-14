@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "PacketRouter.h"
 #include "SteamCapture.h"
@@ -23,7 +23,7 @@ namespace {
     // 6.2.4 hotfix: bumped from 8092 to 262144 (256 KB) to accommodate
     // big achievement schemas. Games like Black Myth: Wukong (147 KB),
     // LEGO Batman, Schedule I etc. ship 50+ achievements with 16+
-    // localized strings each — the modified body easily exceeds 8 KB
+    // localized strings each - the modified body easily exceeds 8 KB
     // even after clear_stats(). With the old 8 KB ceiling the response
     // either truncated to garbage (corrupted Steam's local schema
     // cache) or fell through to pass-through (let dummy-account
@@ -49,7 +49,7 @@ namespace {
     uint8  g_RxPool[kPacketPoolSize][kMaxPacketSize];
     int    g_RxPoolIdx = 0;
 
-    // ── Outgoing (BBuildAndAsyncSendFrame) — same pattern ───────
+    // ── Outgoing (BBuildAndAsyncSendFrame) - same pattern ───────
     uint8  g_TxBody[kMaxBodySize];
     uint32 g_TxBodyLen = 0;
     bool   g_PatchTx = false;
@@ -525,7 +525,7 @@ namespace UserStats {
         // crc the server returns into <steam>/appcache/stats/
         // UserGameStats_<accid>_<appid>.bin. With a non-zero crc and
         // zero stats inside, Steam treats the cache as "valid empty"
-        // on next launch — sends 818 with that crc, server returns
+        // on next launch - sends 818 with that crc, server returns
         // eresult=2 (no update), pass-through, Steam shows the empty
         // cache. The achievement panel goes blank on every restart.
         // Clearing crc here makes Steam re-fetch on every launch so
@@ -730,9 +730,9 @@ namespace OnlineFix {
                 LOG_ONLINEFIX_INFO("OnlineFix: 480 -> name '{}' (real appid {})",
                                    name, realAppId);
             } else if (storedReal && appid == storedReal) {
-                // Real appid leaked through — SpawnProcess rewrite missed.
+                // Real appid leaked through - SpawnProcess rewrite missed.
                 LOG_ONLINEFIX_WARN("OnlineFix: games_played carries real appid {} "
-                                   "(expected 480 — SpawnProcess rewrite did not run)",
+                                   "(expected 480 - SpawnProcess rewrite did not run)",
                                    appid);
             }
         }
@@ -835,7 +835,7 @@ namespace DepotFallback {
         if (!resolved) {
             // Either no Submit ever ran for this jobid (depot wasn't ours)
             // or the HTTP fetch failed/timed out. Let the original frame
-            // pass through — Steam falls back to its own retry path.
+            // pass through - Steam falls back to its own retry path.
             LOG_MANIFESTCH_DEBUG("GetManifestRequestCode recv: jobid={} no patch (cbBody={} hdr.eresult={})",
                                  jobId, cbBody, hdr.eresult());
             return;
@@ -923,7 +923,7 @@ namespace {
             return;
 
         case k_EMsgClientGetAppOwnershipTicket:       // 857
-            // Inspector only — log which app Steam asks for tickets on.
+            // Inspector only - log which app Steam asks for tickets on.
             AppOwnershipTicketResp::HandleSend(pBody, cbBody);
             return;
 
@@ -991,7 +991,7 @@ namespace {
             return;
 
         case k_EMsgClientGetAppOwnershipTicketResponse:     // 858
-            // Inspector only — logs server reply so we can see why the
+            // Inspector only - logs server reply so we can see why the
             // ticket fetch is failing for Steam-DRM games like Teardown.
             AppOwnershipTicketResp::HandleRecv(pHdr, cbHdr, pBody, cbBody);
             return;
@@ -1010,7 +1010,7 @@ namespace {
             // Steam sends this when a family-shared library entry transitions
             // between locked/unlocked. Clearing means "nothing is locked",
             // which keeps fake-owned apps playable when the actual owner is
-            // online. Defensive — observed cases where 9406 alone wasn't
+            // online. Defensive - observed cases where 9406 alone wasn't
             // enough on the latest Steam client.
             FamilySharing::ClearBody(pBody, cbBody);
             return;

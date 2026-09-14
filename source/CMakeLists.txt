@@ -148,7 +148,7 @@ target_compile_definitions(LumaCore PRIVATE
 )
 
 # ---------------------------------------------------------------------------
-# LumaCorePayload — DLL injected into a game launched with -onlinefix
+# LumaCorePayload - DLL injected into a game launched with -onlinefix
 # ---------------------------------------------------------------------------
 add_library(LumaCorePayload SHARED
     payload/LumaCorePayload/LumaCorePayloadEntry.cpp
@@ -172,7 +172,7 @@ add_library(dwmapi SHARED
 set_target_properties(dwmapi PROPERTIES PREFIX "" OUTPUT_NAME "dwmapi")
 
 # ---------------------------------------------------------------------------
-# xinput1_4.dll hijack — secondary loader DLL placed alongside Steam.
+# xinput1_4.dll hijack - secondary loader DLL placed alongside Steam.
 # ---------------------------------------------------------------------------
 add_library(xinput1_4 SHARED
     proxy/LcXInputProxy.cpp

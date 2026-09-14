@@ -56,7 +56,7 @@ message CMsgProtoBufHeader {
 }
 
 // ============================================================
-// EncryptedAppTicket — nested sub-message
+// EncryptedAppTicket - nested sub-message
 // ============================================================
 
 message EncryptedAppTicket {

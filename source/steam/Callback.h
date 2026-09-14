@@ -1,7 +1,7 @@
-// LumaCore — Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #pragma once
 
@@ -28,12 +28,12 @@ struct AppLicensesChanged_t
 {
 	enum { k_iCallback = 1020094 };
 
-	bool      m_bReloadAll;                // 0x00  — true = full library refresh
+	bool      m_bReloadAll;                // 0x00  - true = full library refresh
 	bool      m_bIsFirstLoad;              // 0x01
 	uint32    m_unRemainingPackets;         // 0x04
-	uint32    m_unCount;                    // 0x08  — number of entries in m_rgAppsUpdated
-	AppId_t   m_rgAppsUpdated[64];         // 0x0C  — batch of updated AppIds
-	uint64    m_unAppsAdded;               // 0x110 — bitmask: bit N = m_rgAppsUpdated[N] was added
+	uint32    m_unCount;                    // 0x08  - number of entries in m_rgAppsUpdated
+	AppId_t   m_rgAppsUpdated[64];         // 0x0C  - batch of updated AppIds
+	uint64    m_unAppsAdded;               // 0x110 - bitmask: bit N = m_rgAppsUpdated[N] was added
 };
 static_assert(sizeof(AppLicensesChanged_t) == 0x118,
               "AppLicensesChanged_t must be 0x118 bytes");

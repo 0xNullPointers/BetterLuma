@@ -1,7 +1,7 @@
-// LumaCore — Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #pragma once
 
@@ -63,7 +63,7 @@ namespace PatternFetcher {
     // Runs the cache-first / network-fallback load chain on the calling
     // thread. Caller wraps this in a detached worker so the Steam loader
     // thread never blocks on network IO. subdir must be "steamclient" or
-    // "steamui" — picks the matching folder under the pattern repo for the
+    // "steamui" - picks the matching folder under the pattern repo for the
     // network fetch. The local cache is flat at <Steam>\lumacore\pattern\
     // <sha>.toml since the SHA is unique per module on disk.
     PatternResult LoadFor(HMODULE moduleHandle, const char* subdir);

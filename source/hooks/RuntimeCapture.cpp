@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "RuntimeCapture.h"
 #include "Macros.h"
@@ -41,7 +41,7 @@ namespace {
     // These replace the old VEH int3 captures for MarkLicenseAsChanged and
     // GetPackageInfo. Detours hooks fire on every call regardless of when they
     // were installed, so we capture pCUser and pCPackageInfo on the first
-    // natural Steam call after login — even if that happens after startup.
+    // natural Steam call after login - even if that happens after startup.
     void* g_pCUser        = nullptr;
     void* g_pCPackageInfo = nullptr;
     std::atomic<bool> g_startupInjectionDone{false};
@@ -134,7 +134,7 @@ namespace {
 
     // ── MarkLicenseAsChanged Detours hook ────────────────────────────────────
     // Captures pCUser (RCX = this) on first call, then triggers startup injection.
-    // This replaces the old VEH int3 capture — Detours fires on every call
+    // This replaces the old VEH int3 capture - Detours fires on every call
     // regardless of when the hook was installed, so we always get pCUser.
     LC_HOOK_DEF(MarkLicenseAsChanged, int64, void* pThis, uint32 packageId, bool bReloadAll) {
         if (!g_pCUser) {
@@ -148,7 +148,7 @@ namespace {
     }
 
     // ── GetPackageInfo Detours hook ───────────────────────────────────────────
-    // Captures pCPackageInfo (RCX = this) on first call — kept for NotifyLicenseChanged.
+    // Captures pCPackageInfo (RCX = this) on first call - kept for NotifyLicenseChanged.
     LC_HOOK_DEF(GetPackageInfo, PackageInfo*, void* pThis, uint32 packageId, int64 p3) {
         if (!g_pCPackageInfo) {
             g_pCPackageInfo = pThis;
@@ -247,7 +247,7 @@ namespace {
                 // stale ticket from a previous account, and writes a minimal
                 // unsigned blob if nothing is cached. For Steam-DRM (Steam
                 // Stub) v2.2+ titles like Teardown the unsigned blob still
-                // fails the wrapper signature check — the fix there is
+                // fails the wrapper signature check - the fix there is
                 // Steamless from SteaMidra. For older v1.5 / early-v2
                 // wrappers and tools that only read the SteamID/AppID
                 // fields this is enough on its own.
@@ -258,7 +258,7 @@ namespace {
                 if (hasDepot && hasFlag) {
                     g_OnlineFixRealAppId.store(appId, std::memory_order_release);
                     *pGameID = kOnlineFixAppId;
-                    LOG_MISC_INFO("SpawnProcess: ONLINEFIX ACTIVE — appid {} -> {}, real stored",
+                    LOG_MISC_INFO("SpawnProcess: ONLINEFIX ACTIVE - appid {} -> {}, real stored",
                                   appId, kOnlineFixAppId);
                 } else {
                     g_OnlineFixRealAppId.store(0, std::memory_order_release);
@@ -358,7 +358,7 @@ namespace SteamCapture {
 
     AppId_t GetAppIDForCurrentPipe() {
         if (!g_steamEngine || !oGetAppIDForCurrentPipe) {
-            LOG_MISC_WARN("GetAppIDForCurrentPipe called before capture — returning 0");
+            LOG_MISC_WARN("GetAppIDForCurrentPipe called before capture - returning 0");
             return 0;
         }
         auto appid = oGetAppIDForCurrentPipe(g_steamEngine);
@@ -462,7 +462,7 @@ namespace SteamCapture {
             return;
         }
 
-        // Two-phase order — copies the OST flow exactly.
+        // Two-phase order - copies the OST flow exactly.
         //   1. Mutate the package vector (drop removals, append additions)
         //   2. Trigger Steam's MarkLicenseAsChanged + ProcessPendingLicenseUpdates
         //   3. THEN evict UI cards via RemoveAppOverviewBatch
@@ -513,12 +513,12 @@ namespace SteamCapture {
         //
         // Three separate attempts to evict library cards via SteamUI's
         // CAppOverview_Change dispatch all crashed Steam at different points:
-        //   1. Per-id INSIDE the AppIdVec mutation loop — race with Steam's
+        //   1. Per-id INSIDE the AppIdVec mutation loop - race with Steam's
         //      reads on the same vector.
-        //   2. Batched after the loop — webhelper choked on a 20-id removal
+        //   2. Batched after the loop - webhelper choked on a 20-id removal
         //      burst in one packet.
         //   3. Per-id AFTER the license refresh, no batching, identical to
-        //      OST's published code — STILL crashed in user testing.
+        //      OST's published code - STILL crashed in user testing.
         //
         // OldLumaCore shipped without this step and only had the visual
         // side-effect of cards lingering as "Purchase" until Steam restarted.

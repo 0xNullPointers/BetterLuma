@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "hooks/client/PackagePatch.h"
 #include "hooks/Macros.h"
@@ -182,7 +182,7 @@ namespace {
         return true;
     }
 
-    // Saved pointer to package 0's PackageInfo — captured from LoadPackage hook.
+    // Saved pointer to package 0's PackageInfo - captured from LoadPackage hook.
     // Used by retryable startup injection after hooks are fully installed.
     static PackageInfo* g_pPackage0 = nullptr;
 

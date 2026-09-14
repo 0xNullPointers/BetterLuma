@@ -1,14 +1,14 @@
-// LumaCore — Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #pragma once
 #include "entry.h"
 #include <vector>
 
 namespace PackagePatch {
-    // LoadPackage + CheckAppOwnership — patches the package store so that
+    // LoadPackage + CheckAppOwnership - patches the package store so that
     // user-supplied depots appear owned and accessible.
     void Install();
     void Uninstall();

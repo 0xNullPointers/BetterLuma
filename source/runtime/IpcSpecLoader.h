@@ -1,7 +1,7 @@
-// LumaCore — Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #pragma once
 
@@ -14,7 +14,7 @@
 // pattern repo (path: pattern/ipc/steamclient/<sha256>.toml) that maps
 // interface method names to their current FNV-1a hash, fencepost offset,
 // and argument count. When the spec is available, IPCBus uses the hash
-// from the TOML instead of the compile-time HASH_* constant — this keeps
+// from the TOML instead of the compile-time HASH_* constant - this keeps
 // IPC dispatch working across Steam client updates that shift method
 // order in the vtable.
 //
@@ -38,7 +38,7 @@ namespace IpcSpecLoader {
 
     // Load IPC specs for the steamclient module. Hashes diversion_hModule
     // on disk, tries local cache, falls back to the network chain. Safe
-    // to call multiple times — subsequent calls are no-ops when already
+    // to call multiple times - subsequent calls are no-ops when already
     // loaded. Must be called from InitThread after PatternFetcher finishes
     // its steamclient leg so the cache dir exists.
     void Load();

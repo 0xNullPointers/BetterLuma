@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 //
 // Implementation of the Lua C functions we expose to .lua scripts.
 //
@@ -348,7 +348,7 @@ int Bind_fetchManifestCodeEx(lua_State* L) {
         return 0;
     }
 
-    // ── pinApp(appId) — currently unregistered; left compiled-in. ────────
+    // ── pinApp(appId) - currently unregistered; left compiled-in. ────────
     int Bind_pinApp(lua_State* L) {
         if (lua_gettop(L) < 1) {
             return luaL_error(L, "pinApp: need appId");
@@ -359,7 +359,7 @@ int Bind_fetchManifestCodeEx(lua_State* L) {
     }
 
     // ── setManifestid(depotId, gidString [, size]) ──────────────────────
-    // The optional `size` is intentionally ignored — Steam rejects manifests
+    // The optional `size` is intentionally ignored - Steam rejects manifests
     // when the size doesn't line up with what the depot reports, so we force
     // 0 and let Steam fill it in.
     int Bind_setManifestid(lua_State* L) {

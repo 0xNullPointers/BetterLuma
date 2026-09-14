@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 //
 // Owns the lua_State lifecycle and the binding registry.
 //
@@ -115,7 +115,7 @@ namespace LuaLoader::Internal {
         std::unordered_map<std::string, lua_CFunction> g_caseFoldedBindings;
 
         // Registry of canonical bindings.
-        // setStat is achievement-ringfenced — never rename or change its
+        // setStat is achievement-ringfenced - never rename or change its
         // signature.
         struct Binding {
             const char*   name;
@@ -173,7 +173,7 @@ namespace LuaLoader::Internal {
         }
 
         // Stdlib sandbox. We deliberately do NOT call luaL_openlibs because
-        // it pulls in io, os, package, debug, coroutine — every one of those
+        // it pulls in io, os, package, debug, coroutine - every one of those
         // gives a hostile .lua file a way to read/write files, shell out, or
         // load arbitrary bytecode. Plugin scripts only need pure-data
         // primitives so we open exactly four libs by hand.

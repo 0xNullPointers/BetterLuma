@@ -1,7 +1,7 @@
-// LumaCore — Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "hooks/client/StringFind.h"
 
@@ -105,7 +105,7 @@ void* FindFunction(HMODULE hMod, const char* targetStr, int occurrence)
         auto* rfBegin = reinterpret_cast<PRUNTIME_FUNCTION>(base + ed.VirtualAddress);
         auto* rfEnd   = rfBegin + ed.Size / sizeof(RUNTIME_FUNCTION);
 
-        // binary search — array is sorted by BeginAddress
+        // binary search - array is sorted by BeginAddress
         auto it = std::upper_bound(
             rfBegin, rfEnd, static_cast<DWORD>(instrRVA),
             [](DWORD val, const RUNTIME_FUNCTION& rf) {

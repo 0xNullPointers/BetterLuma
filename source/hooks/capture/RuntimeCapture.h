@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #pragma once
 
@@ -106,6 +106,6 @@ namespace SteamCapture {
     // Once active, GetAppID reports 480 so P2P session certs match.
     void NotifyNetworkingSocketsUsed();
 
-    // True once P2P is active — GetAppID should report 480, not the real app.
+    // True once P2P is active - GetAppID should report 480, not the real app.
     bool ShouldReportOnlineFixAppId();
 }

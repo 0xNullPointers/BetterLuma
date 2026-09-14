@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "hooks/client/ManifestBind.h"
 #include "hooks/Macros.h"
@@ -11,14 +11,14 @@
 #include <string>
 
 // hook that patches depot gid/size in the output vector after Steam builds it.
-// we don't hook BIsDlcEnabled / IsAppDlcInstalled / IsCloudEnabledForApp —
+// we don't hook BIsDlcEnabled / IsAppDlcInstalled / IsCloudEnabledForApp -
 // CheckAppOwnership already covers those, adding em would be redundant.
 
 namespace ManifestBind::Internal {
 
     constexpr uint32_t kDepotHardCap = 8192;
 
-    // safe window over CUtlVector<DepotEntry> — Steam's internal layout
+    // safe window over CUtlVector<DepotEntry> - Steam's internal layout
     class DepotBank {
         CUtlVector<DepotEntry>* m_store = nullptr;
         uint32_t m_items = 0;

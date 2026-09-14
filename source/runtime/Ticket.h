@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #pragma once
 
@@ -94,7 +94,7 @@ namespace Ticket {
     uint64_t GetActiveSteamID64();
 
     // True when appId is in the small hardcoded set of titles known to use
-    // Steam DRM (Steam Stub) — useful for "this game will probably hit
+    // Steam DRM (Steam Stub) - useful for "this game will probably hit
     // error 54 without a registry ticket, suggest Steamless" diagnostics.
     bool IsKnownSteamDrmApp(AppId_t appId);
 

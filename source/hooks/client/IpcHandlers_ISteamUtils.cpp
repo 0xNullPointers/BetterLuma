@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "hooks/client/IpcDispatch.h"
 #include "hooks/client/IpcMethodLoader.h"
@@ -107,7 +107,7 @@ namespace {
         // Let's just check if we can identify the call type from hCall.
 
         // If we got here it means the call returned successfully with data,
-        // so pass through — our other handlers already inject tickets at the
+        // so pass through - our other handlers already inject tickets at the
         // IPC level. This post-handler is just observatory for now.
         LOG_USRCMD_TRACE("IClientUtils::GetAPICallResult: hCall=0x{:X} result={} cubCopied={}",
                          static_cast<uint32_t>(hCall), result, cubCopied);

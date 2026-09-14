@@ -1,7 +1,7 @@
-// LumaCore - Steam client hook layer for SteaMidra.
-// Copyright (c) 2025-2026 Midrag (https://github.com/Midrags).
+// BetterLumaCore - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
-// See <https://www.gnu.org/licenses/> for the full license text.
+// Original work and copyright: see README.md.
 
 #include "ByteScan.h"
 
@@ -128,7 +128,7 @@ void* ScanModule(HMODULE module,
 } // namespace
 
 // Resolve a function in the live module by scanning its image for the
-// analyzer-published byte pattern. The TOML rva is ignored — short prologues
+// analyzer-published byte pattern. The TOML rva is ignored - short prologues
 // recur across functions and trusting a stale rva would point Detours at
 // random code. Scanning the full image and taking the first match keeps us
 // honest at a tiny cost (~1ms per lookup on a 26 MB DLL with memchr anchor).

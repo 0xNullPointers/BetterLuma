@@ -1,5 +1,5 @@
 # Defines a static `detours` target by fetching the upstream Microsoft/Detours
-# sources. Idempotent — safe to include() from multiple CMakeLists.
+# sources. Idempotent - safe to include() from multiple CMakeLists.
 if(TARGET detours)
     return()
 endif()
