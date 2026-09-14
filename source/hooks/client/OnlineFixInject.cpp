@@ -213,8 +213,10 @@ namespace {
         }
 
         wchar_t wPayload[MAX_PATH] = {};
-        MultiByteToWideChar(CP_ACP, 0, PayloadPath, -1, wPayload, MAX_PATH);
-        bool injected = InjectPayload(pi->hProcess, wPayload);
+        if (!MultiByteToWideChar(CP_UTF8, 0, PayloadPath, -1, wPayload, MAX_PATH)) {
+            MultiByteToWideChar(CP_ACP, 0, PayloadPath, -1, wPayload, MAX_PATH);
+        }
+        bool injected = (wPayload[0] != 0) && InjectPayload(pi->hProcess, wPayload);
         // Associate newly spawned primary process PID with its OnlineFix app.
         if (pi && pi->dwProcessId) {
             SteamCapture::AssociateOnlineFixPid(pi->dwProcessId, appId);
@@ -313,7 +315,9 @@ namespace OnlineFixInject {
         if (!realAppId || !exePath || !*exePath) return;
 
         wchar_t wexe[MAX_PATH] = {};
-        MultiByteToWideChar(CP_UTF8, 0, exePath, -1, wexe, MAX_PATH);
+        if (!MultiByteToWideChar(CP_UTF8, 0, exePath, -1, wexe, MAX_PATH)) {
+            MultiByteToWideChar(CP_ACP, 0, exePath, -1, wexe, MAX_PATH);
+        }
         std::wstring key = LowerBasename(wexe);
         if (key.empty()) {
             LOG_ONLINEFIX_WARN("queue skipped appid={} exe=\"{}\"", realAppId, exePath);
