@@ -126,6 +126,32 @@ namespace {
         }
     }
 
+    // Safely scan environment block for SteamAppId variable under structured exception handling
+    static void SafeScanEnvForSteamAppId(const void* env) {
+        if (!env) return;
+        __try {
+            const char* p = static_cast<const char*>(env);
+            const char* end = p + 32768;
+            while (p < end && *p != '\0') {
+                size_t maxLen = static_cast<size_t>(end - p);
+                size_t len = 0;
+                while (len < maxLen && p[len] != '\0') {
+                    ++len;
+                }
+                if (len >= maxLen) break;
+
+                if (len >= 11 && strncmp(p, "SteamAppId=", 11) == 0) {
+                    LOG_MISC_INFO("BuildSpawnEnvBlock: env SteamAppId={}", p + 11);
+                    break;
+                }
+                p += len + 1;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            LOG_MISC_DEBUG("BuildSpawnEnvBlock: exception scanning env block at 0x{:X}",
+                           reinterpret_cast<uintptr_t>(env));
+        }
+    }
+
     // ── PID transfer bypass hook state (prevents detachment of single-process games) ──
     uint8_t* g_pidTransferCheckTarget = nullptr;
     uint8_t  g_pidTransferCheckOriginalBytes[6]{};
@@ -315,15 +341,7 @@ namespace {
         }
 
         if (realAppId && env) {
-            const char* p = static_cast<const char*>(env);
-            const char* end = p + 32768;
-            while (p < end && *p) {
-                if (strncmp(p, "SteamAppId=", 11) == 0) {
-                    LOG_MISC_INFO("BuildSpawnEnvBlock: env SteamAppId={}", p + 11);
-                    break;
-                }
-                p += strlen(p) + 1;
-            }
+            SafeScanEnvForSteamAppId(env);
         }
 
         return result;
