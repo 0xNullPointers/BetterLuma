@@ -176,11 +176,22 @@ namespace {
         std::wstring candidateBasename = LowerBasename(normCandidate.c_str());
 
         std::lock_guard lk(g_queueLock);
+        if (g_queue.empty()) {
+            return false;
+        }
+
         uint64_t now = GetTickCount64();
-        // Purge expired items older than 60 seconds
-        std::erase_if(g_queue, [now](const QueuedInjection& q) {
-            return (now - q.queuedAt) > 60000;
-        });
+        // Purge expired items older than 60 seconds (throttled to at most once every 5 seconds)
+        static uint64_t s_lastPurgeTime = 0;
+        if (now - s_lastPurgeTime >= 5000) {
+            s_lastPurgeTime = now;
+            std::erase_if(g_queue, [now](const QueuedInjection& q) {
+                return (now - q.queuedAt) > 60000;
+            });
+            if (g_queue.empty()) {
+                return false;
+            }
+        }
 
         auto it = g_queue.end();
         // 1. Exact full path match
@@ -192,19 +203,31 @@ namespace {
         if (it == g_queue.end()) {
             it = std::find_if(g_queue.begin(), g_queue.end(), [&](const QueuedInjection& q) {
                 return q.expectedBasename == candidateBasename &&
+                       !q.expectedInstallDir.empty() &&
                        IsSubpathOf(normCandidate, q.expectedInstallDir);
             });
         }
 
-        // 3. Basename match with cwd check if candidate had no absolute directory
+        // 3. Basename match with working directory verification:
+        // Require cwd to be within expectedInstallDir (or installDir within cwd) to prevent
+        // collisions across games sharing common directories.
         if (it == g_queue.end() && !candidateBasename.empty()) {
+            std::wstring normCwd = (cwd && *cwd) ? NormalizePath(cwd) : std::wstring{};
             it = std::find_if(g_queue.begin(), g_queue.end(), [&](const QueuedInjection& q) {
                 if (q.expectedBasename != candidateBasename) return false;
-                if (cwd && *cwd) {
-                    std::wstring normCwd = NormalizePath(cwd);
-                    return IsSubpathOf(normCwd, q.expectedInstallDir);
+                if (!normCwd.empty() && !q.expectedInstallDir.empty()) {
+                    return IsSubpathOf(normCwd, q.expectedInstallDir) ||
+                           IsSubpathOf(q.expectedInstallDir, normCwd);
                 }
-                return true;
+                // If no cwd was supplied, only match if expectedInstallDir is unspecified
+                // or if there is exactly one queued item matching this basename (unambiguous).
+                if (normCwd.empty()) {
+                    size_t count = std::count_if(g_queue.begin(), g_queue.end(), [&](const QueuedInjection& other) {
+                        return other.expectedBasename == candidateBasename;
+                    });
+                    return count == 1;
+                }
+                return false;
             });
         }
 
@@ -348,6 +371,10 @@ namespace {
                 HookStatus::RecordOnlineFixPayload(appId, pi->dwProcessId,
                                                    NarrowPath(LowerBasename(normReal.c_str())),
                                                    "path-validation-failed", "security-reject");
+                // Note: The caller (Steam) owns pi->hProcess and pi->hThread and will close them.
+                // Do NOT call CloseHandle here; closing them while returning TRUE to the caller
+                // causes ERROR_INVALID_HANDLE in Steam and disastrous handle-recycling bugs.
+                // We resume the suspended thread so the non-game process can execute normally.
                 if (!(flags & CREATE_SUSPENDED)) ResumeThread(pi->hThread);
                 return ok;
             }
