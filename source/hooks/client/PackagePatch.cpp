@@ -16,6 +16,8 @@
 #include <limits>
 #include <mutex>
 #include <unordered_set>
+#include <vector>
+#include <cstring>
 
 namespace {
 
@@ -356,13 +358,22 @@ namespace {
         {
             const bool firstOk = oSendCallbackToPipe(pSteamEngine, hSteamPipe, iClientUser,
                                                      iCallback, pCallbackData, cubCallbackData);
-            if (RewriteAchievementCallbackGameId(iCallback, pCallbackData, cubCallbackData)) {
-                LOG_ONLINEFIX_TRACE("OnlineFix_Dual_Dispatch: cb={} pipe=0x{:08X} -> appid {}",
-                                    iCallback,
-                                    static_cast<uint32_t>(hSteamPipe),
-                                    kOnlineFixAppId);
-                oSendCallbackToPipe(pSteamEngine, hSteamPipe, iClientUser,
-                                    iCallback, pCallbackData, cubCallbackData);
+            if (pCallbackData && cubCallbackData >= static_cast<int>(sizeof(uint64_t))) {
+                std::vector<uint8_t> heapBuf;
+                uint8_t stackBuf[512];
+                uint8_t* rewriteBuf = (cubCallbackData <= static_cast<int>(sizeof(stackBuf)))
+                                    ? stackBuf
+                                    : (heapBuf.resize(cubCallbackData), heapBuf.data());
+                std::memcpy(rewriteBuf, pCallbackData, cubCallbackData);
+
+                if (RewriteAchievementCallbackGameId(iCallback, rewriteBuf, cubCallbackData)) {
+                    LOG_ONLINEFIX_TRACE("OnlineFix_Dual_Dispatch: cb={} pipe=0x{:08X} -> appid {}",
+                                        iCallback,
+                                        static_cast<uint32_t>(hSteamPipe),
+                                        kOnlineFixAppId);
+                    oSendCallbackToPipe(pSteamEngine, hSteamPipe, iClientUser,
+                                        iCallback, rewriteBuf, cubCallbackData);
+                }
             }
             return firstOk;
         }
