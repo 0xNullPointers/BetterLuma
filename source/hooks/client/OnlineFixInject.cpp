@@ -77,9 +77,19 @@ namespace {
         int needed = MultiByteToWideChar(CP_UTF8, 0, text.data(),
                                          static_cast<int>(text.size()),
                                          nullptr, 0);
+        if (needed > 0) {
+            std::wstring out(static_cast<size_t>(needed), L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, text.data(),
+                                static_cast<int>(text.size()),
+                                out.data(), needed);
+            return out;
+        }
+        needed = MultiByteToWideChar(CP_ACP, 0, text.data(),
+                                     static_cast<int>(text.size()),
+                                     nullptr, 0);
         if (needed <= 0) return {};
         std::wstring out(static_cast<size_t>(needed), L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, text.data(),
+        MultiByteToWideChar(CP_ACP, 0, text.data(),
                             static_cast<int>(text.size()),
                             out.data(), needed);
         return out;
@@ -212,11 +222,8 @@ namespace {
             return ok;
         }
 
-        wchar_t wPayload[MAX_PATH] = {};
-        if (!MultiByteToWideChar(CP_UTF8, 0, PayloadPath, -1, wPayload, MAX_PATH)) {
-            MultiByteToWideChar(CP_ACP, 0, PayloadPath, -1, wPayload, MAX_PATH);
-        }
-        bool injected = (wPayload[0] != 0) && InjectPayload(pi->hProcess, wPayload);
+        std::wstring wPayload = WideFromUtf8(PayloadPath);
+        bool injected = (!wPayload.empty()) && InjectPayload(pi->hProcess, wPayload.c_str());
         // Associate newly spawned primary process PID with its OnlineFix app.
         if (pi && pi->dwProcessId) {
             SteamCapture::AssociateOnlineFixPid(pi->dwProcessId, appId);
@@ -314,11 +321,8 @@ namespace OnlineFixInject {
     void QueueInjection(const char* exePath, AppId_t realAppId) {
         if (!realAppId || !exePath || !*exePath) return;
 
-        wchar_t wexe[MAX_PATH] = {};
-        if (!MultiByteToWideChar(CP_UTF8, 0, exePath, -1, wexe, MAX_PATH)) {
-            MultiByteToWideChar(CP_ACP, 0, exePath, -1, wexe, MAX_PATH);
-        }
-        std::wstring key = LowerBasename(wexe);
+        std::wstring wexe = WideFromUtf8(exePath);
+        std::wstring key = LowerBasename(wexe.c_str());
         if (key.empty()) {
             LOG_ONLINEFIX_WARN("queue skipped appid={} exe=\"{}\"", realAppId, exePath);
             return;
