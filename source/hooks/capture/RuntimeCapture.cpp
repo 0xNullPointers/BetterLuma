@@ -100,6 +100,32 @@ namespace {
         }
     }
 
+    // Safely write a uint64 value through an unverified pointer under structured exception handling
+    static bool SafeWriteUint64(void* ptr, uint64_t val) {
+        if (!ptr) return false;
+        __try {
+            *reinterpret_cast<uint64_t*>(ptr) = val;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    // Validate that a string pointer references accessible readable memory up to null terminator
+    static bool SafeValidateString(const char* ptr, size_t maxLen = 4096) {
+        if (!ptr) return false;
+        __try {
+            volatile char dummy = 0;
+            for (size_t i = 0; i < maxLen; ++i) {
+                dummy = ptr[i];
+                if (dummy == '\0') return true;
+            }
+            return false;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
     // ── PID transfer bypass hook state (prevents detachment of single-process games) ──
     uint8_t* g_pidTransferCheckTarget = nullptr;
     uint8_t  g_pidTransferCheckOriginalBytes[6]{};
@@ -440,7 +466,15 @@ namespace {
     // ── VEH handler ──────────────────────────────────────────────────────────
     // Scoped to this module's int3 sites only. Foreign RIP ->
     // EXCEPTION_CONTINUE_SEARCH so other VEH handlers still get their turn.
+    thread_local bool g_inVeh = false;
+
     LONG CALLBACK VehHandler(PEXCEPTION_POINTERS pExInfo) {
+        if (g_inVeh) return EXCEPTION_CONTINUE_SEARCH;
+        struct VehGuard {
+            VehGuard()  { g_inVeh = true; }
+            ~VehGuard() { g_inVeh = false; }
+        } guard;
+
         PCONTEXT ctx = pExInfo->ContextRecord;
 
         if (pExInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT) {
@@ -460,21 +494,33 @@ namespace {
             // [RSP+0x28]=pGameID (5th arg, pointer to CGameID, low 24 bits = AppId)
             if (g_spawnProcessTarget
                 && ctx->Rip == reinterpret_cast<uint64_t>(g_spawnProcessTarget)) {
-                auto* pGameID = reinterpret_cast<uint64_t*>(
-                    *reinterpret_cast<uint64_t*>(ctx->Rsp + 0x28));
-                const char* exePath = reinterpret_cast<const char*>(ctx->Rdx);
-                const char* cmdLine = reinterpret_cast<const char*>(ctx->R8);
-                const char* workDir = reinterpret_cast<const char*>(ctx->R9);
-
-                if (!pGameID) {
-                    LOG_MISC_WARN("SpawnProcess: pGameID is null, exe=\"{}\" cmd=\"{}\"",
-                                  exePath ? exePath : "(null)",
-                                  cmdLine ? cmdLine : "(null)");
+                // Safely read the CGameID pointer argument passed on stack at RSP+0x28
+                uint64_t pGameIdAddr = 0;
+                if (!SafeReadUint64(reinterpret_cast<const void*>(ctx->Rsp + 0x28), pGameIdAddr) || pGameIdAddr == 0) {
+                    LOG_MISC_WARN("SpawnProcess: cannot read pGameID pointer from stack (RSP=0x{:X})", ctx->Rsp);
                     *g_spawnProcessTarget = 0x48;
                     ctx->EFlags |= 0x100;
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
-                AppId_t appId = static_cast<AppId_t>(*pGameID & 0xFFFFFF);
+
+                auto* pGameID = reinterpret_cast<uint64_t*>(pGameIdAddr);
+                uint64_t gameIdVal = 0;
+                if (!SafeReadUint64(pGameID, gameIdVal)) {
+                    LOG_MISC_WARN("SpawnProcess: pGameID at 0x{:X} is unreadable", pGameIdAddr);
+                    *g_spawnProcessTarget = 0x48;
+                    ctx->EFlags |= 0x100;
+                    return EXCEPTION_CONTINUE_EXECUTION;
+                }
+
+                const char* exePath = reinterpret_cast<const char*>(ctx->Rdx);
+                const char* cmdLine = reinterpret_cast<const char*>(ctx->R8);
+                const char* workDir = reinterpret_cast<const char*>(ctx->R9);
+
+                if (!SafeValidateString(exePath)) exePath = nullptr;
+                if (!SafeValidateString(cmdLine)) cmdLine = nullptr;
+                if (!SafeValidateString(workDir)) workDir = nullptr;
+
+                AppId_t appId = static_cast<AppId_t>(gameIdVal & 0xFFFFFF);
 
                 *g_spawnProcessTarget = 0x48;
                 ctx->EFlags |= 0x100;
@@ -556,7 +602,7 @@ namespace {
                 } else if (steamStubAuto) {
                     SteamCapture::SetOnlineFixRoute(0, SteamCapture::OnlineFixRouteMode::None);
                     SteamStubAuto::Arm(appId, exePath, probeSteamStub ? steamStubProbe.imagePath : "");
-                    *pGameID = kOnlineFixAppId;
+                    SafeWriteUint64(pGameID, kOnlineFixAppId);
                     LOG_MISC_INFO("SpawnProcess: SteamStubAuto active reason={} appid {} -> {}, CGameID stays 480, overlay resolves real ticketSource={} sourceAppId={} steamStubSource={} steamStubMethod={} matchedImage=\"{}\"",
                                   routeReason, appId, kOnlineFixAppId,
                                   Ticket::TicketPreflightSourceName(ticketPreflight.ticketSource),
