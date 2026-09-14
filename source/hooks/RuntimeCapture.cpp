@@ -67,6 +67,7 @@ namespace {
     // by SetUserStatsContext(false). Read by the GetAppIDForCurrentPipe
     // detour to decide whether to return the real appid.
     thread_local uint32   g_userStatsAppIdOverrideDepth = 0;
+    std::mutex                               g_gameNameCacheMutex;
     std::unordered_map<AppId_t, std::string> g_GameNameCache;
     static std::vector<CaptureEntry> g_captures;
 
@@ -364,7 +365,10 @@ namespace SteamCapture {
         g_StatsScopePipe.store(0, std::memory_order_relaxed);
         g_userStatsAppIdOverrideDepth = 0;
         g_steamEngine.store(nullptr, std::memory_order_release);
-        g_GameNameCache.clear();
+        {
+            std::lock_guard<std::mutex> lock(g_gameNameCacheMutex);
+            g_GameNameCache.clear();
+        }
         g_pCUser.store(nullptr, std::memory_order_release);
         g_pCPackageInfo.store(nullptr, std::memory_order_release);
         g_pCAppInfoCache.store(nullptr, std::memory_order_release);
@@ -418,6 +422,7 @@ namespace SteamCapture {
         return g_StatsScopePipe.load(std::memory_order_acquire);
     }
 
+    // ── Buffer utilities ─────────────────────────────────────────
     void EnsureBufferSize(CUtlBuffer* pWrite, int32 size)
     {
         if (oCUtlBufferEnsureCapacity) {
@@ -431,8 +436,12 @@ namespace SteamCapture {
     // ── Game name ────────────────────────────────────────────────
     std::string GetGameNameByAppID(AppId_t appId)
     {
-        auto it = g_GameNameCache.find(appId);
-        if (it != g_GameNameCache.end()) return it->second;
+        {
+            std::lock_guard<std::mutex> lock(g_gameNameCacheMutex);
+            auto it = g_GameNameCache.find(appId);
+            if (it != g_GameNameCache.end() && !it->second.empty())
+                return it->second;
+        }
 
         std::string name;
 
@@ -446,12 +455,19 @@ namespace SteamCapture {
             int64 len = oGetAppDataFromAppInfo(
                 pAppInfo, appId, "common/name",
                 reinterpret_cast<uint8*>(buf), sizeof(buf));
-            if (len > 1)
-                name.assign(buf, static_cast<size_t>(len - 1));
+            if (len > 1) {
+                size_t copyLen = (std::min)(static_cast<size_t>(len - 1), sizeof(buf) - 1);
+                size_t actualLen = strnlen(buf, copyLen);
+                name.assign(buf, actualLen);
+            }
+        }
+
+        if (!name.empty()) {
+            std::lock_guard<std::mutex> lock(g_gameNameCacheMutex);
+            g_GameNameCache[appId] = name;
         }
 
         LOG_MISC_DEBUG("GetGameNameByAppID({}): {}", appId, name);
-        g_GameNameCache[appId] = name;
         return name;
     }
 
