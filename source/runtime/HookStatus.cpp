@@ -4,6 +4,7 @@
 // Original work and copyright: see README.md.
 
 #include "HookStatus.h"
+#include "runtime/BuildInfo.h"
 
 #include "runtime/Logger.h"
 #include "core/entry.h"
@@ -156,8 +157,6 @@ namespace HookStatus {
         constexpr const char* kProtobufRuntime = "lite";
 #endif
 
-        constexpr const char* kLumaCoreBuildStamp = __DATE__ " " __TIME__;
-        constexpr const char* kLumaCoreVersion = "V36";
         constexpr const char* kStartupCaptureRevision = "package0-early-capture-v1";
 
         // Conservative escaper for JSON string literals. The values we emit are
@@ -201,10 +200,10 @@ namespace HookStatus {
             out += JsonEscape(g_buildId);
             out += "\",\n";
             out += "  \"lumacore_build_stamp\": \"";
-            out += JsonEscape(kLumaCoreBuildStamp);
+            out += JsonEscape(BuildInfo::BuildStamp());
             out += "\",\n";
             out += "  \"lumacore_version\": \"";
-            out += JsonEscape(kLumaCoreVersion);
+            out += JsonEscape(BuildInfo::Version());
             out += "\",\n";
             out += "  \"build_config\": \"";
             out += JsonEscape(kBuildConfig);

@@ -19,6 +19,7 @@
 #include "runtime/BootDiag.h"
 #include "runtime/LibraryInjector.h"
 #include "runtime/CloudRedirectHost.h"
+#include "runtime/BuildInfo.h"
 
 #include <atomic>
 #include <mutex>
@@ -253,7 +254,8 @@ namespace CoreInit {
             Settings::Load(ConfigPath);
             Logger::InitModules();
 
-            LOG_COREIN_INFO("\"stage\" \"Bootstrap\" \"act\" \"start\" \"build\" \"{} {}\"", __DATE__, __TIME__);
+            LOG_COREIN_INFO("\"stage\" \"Bootstrap\" \"act\" \"start\" \"version\" \"{}\" \"build\" \"{}\"",
+                            BuildInfo::Version(), BuildInfo::BuildStamp());
             HookStatus::SetStartupPhase("start");
 
             // Build id first so HookStatus has a value to surface even if the

@@ -17,8 +17,8 @@ on:
     inputs:
       version:
         description: 'Release version tag (e.g. v0.1 or v0.4)'
-        required: false
-        default: 'v0.1'
+        required: true
+        default: 'v0.2'
       publish_release:
         description: 'Publish as GitHub Release'
         type: boolean
@@ -52,24 +52,7 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $ver = ""
-          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.version }}") {
-              $ver = "${{ inputs.version }}"
-          } elseif ("${{ github.ref_type }}" -eq "tag") {
-              $ver = "${{ github.ref_name }}"
-          } else {
-              # Fallback: extract highest version from CHANGELOG.md / changelog.md or default to v0.1
-              $changelogPath = if (Test-Path "CHANGELOG.md") { "CHANGELOG.md" } elseif (Test-Path "changelog.md") { "changelog.md" } else { $null }
-              if ($changelogPath) {
-                  $match = (Get-Content $changelogPath | Select-String -Pattern '^##\s*(v[0-9]+\.[0-9]+(\.[0-9]+)?)') | Select-Object -First 1
-                  if ($match) {
-                      $ver = $match.Matches[0].Groups[1].Value
-                  }
-              }
-              if (-not $ver) {
-                  $ver = "v0.1"
-              }
-          }
+          $ver = if ("${{ inputs.version }}") { "${{ inputs.version }}" } else { "${{ github.ref_name }}" }
           Write-Host "Resolved release version: $ver"
           "RELEASE_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
 
