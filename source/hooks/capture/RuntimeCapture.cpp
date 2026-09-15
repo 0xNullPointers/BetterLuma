@@ -93,8 +93,13 @@ namespace {
     std::unordered_map<AppId_t, OnlineFixAppEntry> g_onlineFixAppEntries;
     std::unordered_map<uint32_t, AppId_t>          g_onlineFixPidToAppId;
 
+    static inline bool IsValidUserPointer64(const void* ptr) {
+        const uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+        return addr >= 0x10000 && addr <= 0x00007FFFFFFFFFF8ULL && (addr & 7) == 0;
+    }
+
     static bool SafeReadUint64(const void* ptr, uint64_t& outVal) {
-        if (!ptr) return false;
+        if (!IsValidUserPointer64(ptr)) return false;
         __try {
             outVal = *reinterpret_cast<const uint64_t*>(ptr);
             return true;
@@ -105,7 +110,7 @@ namespace {
 
     // Safely write a uint64 value through an unverified pointer under structured exception handling
     static bool SafeWriteUint64(void* ptr, uint64_t val) {
-        if (!ptr) return false;
+        if (!IsValidUserPointer64(ptr)) return false;
         __try {
             *reinterpret_cast<uint64_t*>(ptr) = val;
             return true;
@@ -734,9 +739,9 @@ namespace {
     thread_local bool g_inVeh = false;
 
     LONG CALLBACK VehHandler(PEXCEPTION_POINTERS pExInfo) {
-        if (!g_vehActive.load(std::memory_order_acquire)) return EXCEPTION_CONTINUE_SEARCH;
         if (g_inVeh) return EXCEPTION_CONTINUE_SEARCH;
 
+        // Atomically increment in-flight count before checking active state
         g_vehInFlight.fetch_add(1, std::memory_order_acq_rel);
         if (!g_vehActive.load(std::memory_order_acquire)) {
             g_vehInFlight.fetch_sub(1, std::memory_order_acq_rel);
@@ -838,8 +843,20 @@ namespace SteamCapture {
             g_vehHandle = nullptr;
         }
 
-        for (int i = 0; i < 50 && g_vehInFlight.load(std::memory_order_acquire) > 0; ++i) {
+        // Drain all in-flight handlers with generous timeout (200 * 10ms = 2000ms)
+        bool drained = false;
+        for (int i = 0; i < 200; ++i) {
+            if (g_vehInFlight.load(std::memory_order_acquire) == 0) {
+                drained = true;
+                break;
+            }
             Sleep(10);
+        }
+
+        if (!drained) {
+            LOG_MISC_ERROR("Uninstall: VEH in-flight handlers failed to drain (inFlight={}), skipping unsafe cleanup to prevent crash",
+                           g_vehInFlight.load(std::memory_order_relaxed));
+            return;
         }
 
         VEH_CLEANUP_CAPTURES(g_captures);

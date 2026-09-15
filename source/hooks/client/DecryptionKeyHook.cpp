@@ -192,7 +192,9 @@ namespace DecryptionKeyHook {
     }
 
     void StoreSpacewarLanguage(const char* lang) {
-        if (lang) strncpy(g_spacewarLanguage, lang, sizeof(g_spacewarLanguage) - 1);
+        if (lang && lang[0]) {
+            strncpy_s(g_spacewarLanguage, sizeof(g_spacewarLanguage), lang, _TRUNCATE);
+        }
     }
 
     std::string FindAcfPath(AppId_t appId) {

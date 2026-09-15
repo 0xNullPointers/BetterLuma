@@ -286,6 +286,96 @@ namespace {
         return true;
     }
 
+    struct VerifiedSaveFile {
+        HANDLE hFile = INVALID_HANDLE_VALUE;
+        DWORD fileSize = 0;
+
+        ~VerifiedSaveFile() {
+            if (hFile != INVALID_HANDLE_VALUE) {
+                CloseHandle(hFile);
+                hFile = INVALID_HANDLE_VALUE;
+            }
+        }
+    };
+
+    // Atomically opens target save file and verifies its physical location via kernel handle
+    // to eliminate TOCTOU symlink/junction swap races.
+    static bool OpenAndVerifySecureSaveFile(const char* targetPath, const char* steamRoot,
+                                           DWORD steamId32, AppId_t appId,
+                                           VerifiedSaveFile& out) {
+        if (!targetPath || !targetPath[0] || !steamRoot || !steamRoot[0])
+            return false;
+
+        // Open with FILE_FLAG_OPEN_REPARSE_POINT to prevent following a symlink or junction at target
+        HANDLE h = CreateFileA(targetPath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (h == INVALID_HANDLE_VALUE)
+            return false;
+
+        BY_HANDLE_FILE_INFORMATION info{};
+        if (!GetFileInformationByHandle(h, &info)) {
+            CloseHandle(h);
+            return false;
+        }
+
+        // Must be a regular file, strictly forbidding directories or reparse points
+        if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            CloseHandle(h);
+            return false;
+        }
+
+        // Query kernel for the physical canonical path of the open file object
+        char finalPath[MAX_PATH * 2]{};
+        DWORD len = GetFinalPathNameByHandleA(h, finalPath, sizeof(finalPath), FILE_NAME_NORMALIZED);
+        if (len == 0 || len >= sizeof(finalPath)) {
+            CloseHandle(h);
+            return false;
+        }
+
+        // Build canonical base path
+        std::error_code ec;
+        std::filesystem::path baseDir = std::filesystem::path(steamRoot) / "userdata" /
+                                       std::to_string(steamId32) / std::to_string(appId) / "remote";
+        std::filesystem::path canonicalBase = std::filesystem::weakly_canonical(baseDir, ec);
+        if (ec) {
+            CloseHandle(h);
+            return false;
+        }
+
+        std::filesystem::path resolvedPath(finalPath);
+        std::string resolvedStr = resolvedPath.string();
+        if (resolvedStr.rfind(R"(\\?\)", 0) == 0) {
+            resolvedStr.erase(0, 4);
+            resolvedPath = resolvedStr;
+        }
+
+        // Verify resolved path strictly resides inside canonicalBase
+        auto b = canonicalBase.begin();
+        auto t = resolvedPath.begin();
+        while (b != canonicalBase.end() && t != resolvedPath.end()) {
+            if (_wcsicmp(b->c_str(), t->c_str()) != 0) {
+                CloseHandle(h);
+                return false;
+            }
+            ++b;
+            ++t;
+        }
+        if (b != canonicalBase.end() || t == resolvedPath.end()) {
+            CloseHandle(h);
+            return false;
+        }
+        ++t;
+        if (t != resolvedPath.end()) {
+            CloseHandle(h);
+            return false;
+        }
+
+        out.hFile = h;
+        out.fileSize = info.nFileSizeLow;
+        return true;
+    }
+
     LM_HOOK(IPCProcessMessage, bool,
               void* pServer, HSteamPipe hPipe,
               CUtlBuffer* pRead, CUtlBuffer* pWrite)
@@ -347,8 +437,8 @@ namespace {
                                     };
 
                                 if (fHash == 0x376E83D6) {  // FileExists
-                                    DWORD attrs = GetFileAttributesA(savePath);
-                                    if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY) && !(attrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                                    VerifiedSaveFile vsf;
+                                    if (OpenAndVerifySecureSaveFile(savePath, SteamInstallPath, steamId32, real, vsf)) {
                                         if (ensureCap(14)) {
                                             uint8_t frame[14] = {};
                                             uint32_t len = 14; memcpy(frame, &len, 4);
@@ -364,52 +454,39 @@ namespace {
                                         LOG_IPCRTR_INFO("\"evt\" \"SaveInject\" \"fn\" \"FileExists\" \"path\" \"{}\" \"result\" \"not-found\"", savePath);
                                     }
                                 } else if (fHash == 0xC69A678D) {  // GetFileSize
-                                    DWORD attrs = GetFileAttributesA(savePath);
-                                    if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY) && !(attrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
-                                        HANDLE hFile = CreateFileA(savePath, GENERIC_READ,
-                                            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-                                        if (hFile != INVALID_HANDLE_VALUE) {
-                                            DWORD fileSize = GetFileSize(hFile, nullptr);
-                                            CloseHandle(hFile);
-                                            if (fileSize != INVALID_FILE_SIZE && ensureCap(14)) {
-                                                uint8_t frame[14] = {};
-                                                uint32_t len = 14; memcpy(frame, &len, 4);
-                                                uint32_t result = 0; memcpy(frame + 4, &result, 4);
-                                                memcpy(frame + 8, &fileSize, 4);
-                                                memcpy(pWrite->Base(), frame, 14);
-                                                pWrite->m_Put = 14;
-                                                LOG_IPCRTR_INFO("\"evt\" \"SaveInject\" \"fn\" \"GetFileSize\" \"path\" \"{}\" \"size\" {}", savePath, fileSize);
-                                                return true;
-                                            }
+                                    VerifiedSaveFile vsf;
+                                    if (OpenAndVerifySecureSaveFile(savePath, SteamInstallPath, steamId32, real, vsf)) {
+                                        DWORD fileSize = vsf.fileSize;
+                                        if (fileSize != INVALID_FILE_SIZE && ensureCap(14)) {
+                                            uint8_t frame[14] = {};
+                                            uint32_t len = 14; memcpy(frame, &len, 4);
+                                            uint32_t result = 0; memcpy(frame + 4, &result, 4);
+                                            memcpy(frame + 8, &fileSize, 4);
+                                            memcpy(pWrite->Base(), frame, 14);
+                                            pWrite->m_Put = 14;
+                                            LOG_IPCRTR_INFO("\"evt\" \"SaveInject\" \"fn\" \"GetFileSize\" \"path\" \"{}\" \"size\" {}", savePath, fileSize);
+                                            return true;
                                         }
                                     }
                                 } else if (fHash == 0xA0F6FDBD) {  // FileRead
-                                    DWORD attrs = GetFileAttributesA(savePath);
-                                    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY) || (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
-                                        LOG_IPCRTR_WARN("\"evt\" \"SaveInject\" \"fn\" \"FileRead\" \"err\" \"invalid-attributes\" \"path\" \"{}\"", savePath);
-                                    } else {
-                                        HANDLE hFile = CreateFileA(savePath, GENERIC_READ,
-                                            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-                                        if (hFile != INVALID_HANDLE_VALUE) {
-                                            DWORD fileSize = GetFileSize(hFile, nullptr);
-                                            if (fileSize != INVALID_FILE_SIZE && fileSize < 1 * 1024 * 1024
-                                                && ensureCap(14u + fileSize)) {
-                                                uint8_t frame[14] = {};
-                                                uint32_t totalLen = 14 + fileSize; memcpy(frame, &totalLen, 4);
-                                                uint32_t result = 0; memcpy(frame + 4, &result, 4);
-                                                memcpy(frame + 8, &fileSize, 4);
-                                                memcpy(pWrite->Base(), frame, 14);
-                                                DWORD read = 0;
-                                                ReadFile(hFile, pWrite->Base() + 14, fileSize, &read, nullptr);
-                                                pWrite->m_Put = 14 + read;
-                                                CloseHandle(hFile);
-                                                LOG_IPCRTR_INFO("\"evt\" \"SaveInject\" \"fn\" \"FileRead\" \"path\" \"{}\" \"size\" {} \"read\" {}", savePath, fileSize, read);
-                                                return true;
-                                            }
-                                            CloseHandle(hFile);
+                                    VerifiedSaveFile vsf;
+                                    if (OpenAndVerifySecureSaveFile(savePath, SteamInstallPath, steamId32, real, vsf)) {
+                                        DWORD fileSize = vsf.fileSize;
+                                        if (fileSize != INVALID_FILE_SIZE && fileSize < 1 * 1024 * 1024
+                                            && ensureCap(14u + fileSize)) {
+                                            uint8_t frame[14] = {};
+                                            uint32_t totalLen = 14 + fileSize; memcpy(frame, &totalLen, 4);
+                                            uint32_t result = 0; memcpy(frame + 4, &result, 4);
+                                            memcpy(frame + 8, &fileSize, 4);
+                                            memcpy(pWrite->Base(), frame, 14);
+                                            DWORD read = 0;
+                                            ReadFile(vsf.hFile, pWrite->Base() + 14, fileSize, &read, nullptr);
+                                            pWrite->m_Put = 14 + read;
+                                            LOG_IPCRTR_INFO("\"evt\" \"SaveInject\" \"fn\" \"FileRead\" \"path\" \"{}\" \"size\" {} \"read\" {}", savePath, fileSize, read);
+                                            return true;
                                         }
+                                    } else {
+                                        LOG_IPCRTR_WARN("\"evt\" \"SaveInject\" \"fn\" \"FileRead\" \"err\" \"open-or-verify-failed\" \"path\" \"{}\"", savePath);
                                     }
                                 }
                                 }
