@@ -68,7 +68,6 @@ namespace {
 
     // ── per-session state ─────────────────────────────────────────────────────
     std::atomic<void*>    g_steamEngine{nullptr};
-    std::atomic<uint8_t*> g_spawnProcessTarget{nullptr};
     PVOID                 g_vehHandle          = nullptr;
     std::atomic<bool>     g_vehActive{false};
     std::atomic<uint32_t> g_vehInFlight{0};
@@ -250,6 +249,20 @@ namespace {
         return appid;
     }
 
+    // Prevents substring matches like "-onlinefixpatch" triggering the -onlinefix path.
+    static bool HasExactFlag(const char* cmd, const char* flag) {
+        if (!cmd || !flag) return false;
+        const char* p = cmd;
+        size_t n = strlen(flag);
+        while ((p = strstr(p, flag))) {
+            bool startOk = (p == cmd || p[-1] == ' ');
+            bool endOk   = (p[n] == '\0' || p[n] == ' ');
+            if (startOk && endOk) return true;
+            p += n;
+        }
+        return false;
+    }
+
     // ── Language sync for OnlineFix route ──────────────────────────
     void SyncLanguageToSpacewar(AppId_t realAppId) {
         if (!realAppId) return;
@@ -355,6 +368,142 @@ namespace {
         }
 
         return result;
+    }
+
+    // ── SpawnProcess Detours hook ─────────────────────────────────────────────
+    // Intercepts CUser_SpawnProcess to manage OnlineFix routing, SteamStub auto-detection,
+    // preflight tickets, and Spacewar (480) appid rewrites cleanly via Detours instead of VEH.
+    LM_HOOK(SpawnProcess, bool,
+            void* pCUser, const char* pExePath, const char* pCommandLine, const char* pWorkingDir,
+            uint64_t* pGameID, void* a6, void* a7, void* a8, void* a9, void* a10, void* a11, void* a12, void* a13, void* a14)
+    {
+        uint64_t gameIdVal = 0;
+        if (!pGameID || !SafeReadUint64(pGameID, gameIdVal)) {
+            LOG_MISC_WARN("SpawnProcess: pGameID is null or unreadable, exe=\"{}\" cmd=\"{}\"",
+                          pExePath ? pExePath : "(null)",
+                          pCommandLine ? pCommandLine : "(null)");
+            return oSpawnProcess(pCUser, pExePath, pCommandLine, pWorkingDir, pGameID, a6, a7, a8, a9, a10, a11, a12, a13, a14);
+        }
+
+        const char* exePath = pExePath;
+        const char* cmdLine = pCommandLine;
+        const char* workDir = pWorkingDir;
+
+        if (!SafeValidateString(exePath)) exePath = nullptr;
+        if (!SafeValidateString(cmdLine)) cmdLine = nullptr;
+        if (!SafeValidateString(workDir)) workDir = nullptr;
+
+        AppId_t appId = static_cast<AppId_t>(gameIdVal & 0xFFFFFF);
+
+        bool hasDepot = LuaLoader::HasDepot(appId);
+        bool owned = LuaLoader::IsOwned(appId);
+        bool hasFlag = (cmdLine != nullptr) && HasExactFlag(cmdLine, "-onlinefix");
+        bool knownSteamStub = Ticket::IsKnownSteamDrmApp(appId);
+        ProtectionProbe::ScanResult steamStubProbe{};
+        if (hasDepot && !owned && !knownSteamStub && exePath) {
+            steamStubProbe = ProtectionProbe::ScanBeforeSpawn(appId, exePath);
+        }
+        const bool probeSteamStub = steamStubProbe.valid && steamStubProbe.routeAccepted;
+        const bool detectedSteamStub = knownSteamStub || probeSteamStub;
+        const std::string steamStubSource = knownSteamStub ? "known-list" :
+            (steamStubProbe.valid && steamStubProbe.detected ? "pre-spawn-probe" : "none");
+        const std::string steamStubMethod = knownSteamStub ? "known-list" :
+            (steamStubProbe.valid ? steamStubProbe.method : "skipped");
+        const std::string steamStubImage = steamStubProbe.valid && steamStubProbe.detected
+            ? steamStubProbe.imagePath
+            : (exePath ? exePath : "");
+        bool autoSteamStubCandidate = hasDepot && !owned && !hasFlag && detectedSteamStub;
+        HookStatus::RecordSteamStubDetection(appId, steamStubSource, steamStubMethod,
+                                             steamStubImage, steamStubProbe.candidates,
+                                             detectedSteamStub,
+                                             knownSteamStub ? "accepted" : steamStubProbe.routeReason);
+
+        LOG_MISC_INFO("SpawnProcess: hit appid={} hasDepot={} owned={} hasFlag={} autoSteamStubCandidate={} steamStubRouteAccepted={} steamStubRouteReason={} steamStubSource={} steamStubMethod={} steamStubImage=\"{}\" candidates={} exe=\"{}\" cmd=\"{}\"",
+                      appId, hasDepot, owned, hasFlag, autoSteamStubCandidate,
+                      detectedSteamStub,
+                      knownSteamStub ? "accepted" : steamStubProbe.routeReason,
+                      steamStubSource,
+                      steamStubMethod,
+                      steamStubImage,
+                      steamStubProbe.candidates,
+                      exePath ? exePath : "(null)",
+                      cmdLine ? cmdLine : "(null)");
+
+        Ticket::TicketPreflightResult ticketPreflight{};
+        if (hasDepot) {
+            ticketPreflight = Ticket::EnsureRegistryTicketsForApp(appId, detectedSteamStub);
+            LOG_MISC_INFO("SpawnProcess: ticketPreflight={} ticketStatus={} ticketSource={} sourceAppId={} changed={} knownSteamStub={} steamStubSource={} steamStubMethod={}",
+                          Ticket::TicketPreflightActionName(ticketPreflight.action),
+                          Ticket::AppTicketStatusName(ticketPreflight.ticketStatus),
+                          Ticket::TicketPreflightSourceName(ticketPreflight.ticketSource),
+                          ticketPreflight.sourceAppId,
+                          ticketPreflight.changed,
+                          ticketPreflight.knownSteamStub,
+                          steamStubSource,
+                          steamStubMethod);
+        }
+
+        bool steamStubAuto = SteamStubAuto::ShouldActivate(appId, hasDepot, owned,
+                                                           hasFlag, detectedSteamStub);
+        bool missingSteamStubTicket =
+            autoSteamStubCandidate
+            && ticketPreflight.ticketSource == Ticket::TicketPreflightSource::Missing;
+        bool routeThrough480 = hasDepot && hasFlag;
+        const char* routeReason = hasFlag ? "manual-flag" :
+                                  (steamStubAuto ? "steamstub-auto" :
+                                   (missingSteamStubTicket ? "steamstub-ticket-missing" : "none"));
+        auto routeMode = hasFlag ? SteamCapture::OnlineFixRouteMode::ManualFlag
+                                  : SteamCapture::OnlineFixRouteMode::None;
+
+        if (routeThrough480) {
+            SteamCapture::SetOnlineFixRoute(appId, routeMode);
+            // Keep *pGameID as realAppId so Steam tracks process lifetime, UI Stop button, and playtime.
+            LOG_MISC_INFO("SpawnProcess: OnlineFix route active reason={} routeMode={} appid={}, tracking real app",
+                          routeReason, SteamCapture::OnlineFixRouteModeName(routeMode),
+                          appId);
+            SyncLanguageToSpacewar(appId);
+            if (detectedSteamStub) {
+                SteamStubAuto::Arm(appId, exePath, probeSteamStub ? steamStubProbe.imagePath : "");
+                LOG_MISC_INFO("SpawnProcess: -onlinefix with SteamStub DRM, armed ticket handler");
+            } else {
+                SteamStubAuto::Clear();
+            }
+            OnlineFixInject::QueueInjection(exePath, appId);
+        } else if (steamStubAuto) {
+            SteamCapture::SetOnlineFixRoute(0, SteamCapture::OnlineFixRouteMode::None);
+            SteamStubAuto::Arm(appId, exePath, probeSteamStub ? steamStubProbe.imagePath : "");
+            SafeWriteUint64(pGameID, kOnlineFixAppId);
+            LOG_MISC_INFO("SpawnProcess: SteamStubAuto active reason={} appid {} -> {}, CGameID stays 480, overlay resolves real ticketSource={} sourceAppId={} steamStubSource={} steamStubMethod={} matchedImage=\"{}\"",
+                          routeReason, appId, kOnlineFixAppId,
+                          Ticket::TicketPreflightSourceName(ticketPreflight.ticketSource),
+                          ticketPreflight.sourceAppId,
+                          steamStubSource,
+                          steamStubMethod,
+                          probeSteamStub ? steamStubProbe.imagePath : "");
+            if (missingSteamStubTicket) {
+                LOG_MISC_WARN("SpawnProcess: SteamStubAuto ticket source missing for appid={}, route still active",
+                              appId);
+            }
+        } else {
+            SteamCapture::SetOnlineFixRoute(0, SteamCapture::OnlineFixRouteMode::None);
+            SteamStubAuto::Clear();
+            if (missingSteamStubTicket) {
+                LOG_MISC_WARN("SpawnProcess: steamstub-ticket-missing appid={} ticketPreflight={} ticketStatus={} ticketSource={}",
+                              appId,
+                              Ticket::TicketPreflightActionName(ticketPreflight.action),
+                              Ticket::AppTicketStatusName(ticketPreflight.ticketStatus),
+                              Ticket::TicketPreflightSourceName(ticketPreflight.ticketSource));
+            }
+            LOG_MISC_DEBUG("SpawnProcess: 480 route not activated for appid={} "
+                           "(reason: {}{}{}{})",
+                           appId,
+                           !hasDepot ? "no-depot " : "",
+                           owned ? "owned " : "",
+                           !hasFlag && !autoSteamStubCandidate ? "no-flag " : "",
+                           routeThrough480 ? "(internal)" : "");
+        }
+
+        return oSpawnProcess(pCUser, pExePath, pCommandLine, pWorkingDir, pGameID, a6, a7, a8, a9, a10, a11, a12, a13, a14);
     }
 
     // ── MarkLicenseAsChanged Detours hook ────────────────────────────────────
@@ -486,18 +635,6 @@ namespace {
             LOG_PACKAGE_WARN("StartStartupInjectionRetry: CreateThread failed err={}", GetLastError());
         }
     }
-    // Prevents substring matches like "-onlinefixpatch" triggering the -onlinefix path.
-    static bool HasExactFlag(const char* cmd, const char* flag) {
-        const char* p = cmd;
-        size_t n = strlen(flag);
-        while ((p = strstr(p, flag))) {
-            bool startOk = (p == cmd || p[-1] == ' ');
-            bool endOk   = (p[n] == '\0' || p[n] == ' ');
-            if (startOk && endOk) return true;
-            p += n;
-        }
-        return false;
-    }
 
     // ── VEH handler ──────────────────────────────────────────────────────────
     // Scoped to this module's int3 sites only. Foreign RIP ->
@@ -515,154 +652,6 @@ namespace {
                                   reinterpret_cast<uint64_t>(cap.outPtr ? cap.outPtr->load(std::memory_order_relaxed) : nullptr));
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
-            }
-
-            // CUser_SpawnProcess(pCUser, pExePath, pCommandLine, pWorkingDir,
-            //                   pGameID, ...)
-            // RCX=pCUser, RDX=pExePath, R8=pCommandLine, R9=pWorkingDir
-            // [RSP+0x28]=pGameID (5th arg, pointer to CGameID, low 24 bits = AppId)
-            uint8_t* pSpawnTarget = g_spawnProcessTarget.load(std::memory_order_acquire);
-            if (pSpawnTarget
-                && ctx->Rip == reinterpret_cast<uint64_t>(pSpawnTarget)) {
-                // Safely read the CGameID pointer argument passed on stack at RSP+0x28
-                uint64_t pGameIdAddr = 0;
-                if (!SafeReadUint64(reinterpret_cast<const void*>(ctx->Rsp + 0x28), pGameIdAddr) || pGameIdAddr == 0) {
-                    LOG_MISC_WARN("SpawnProcess: cannot read pGameID pointer from stack (RSP=0x{:X})", ctx->Rsp);
-                    VehUtil::RestoreByte(pSpawnTarget, 0x48);
-                    ctx->EFlags |= 0x100;
-                    return EXCEPTION_CONTINUE_EXECUTION;
-                }
-
-                auto* pGameID = reinterpret_cast<uint64_t*>(pGameIdAddr);
-                uint64_t gameIdVal = 0;
-                if (!SafeReadUint64(pGameID, gameIdVal)) {
-                    LOG_MISC_WARN("SpawnProcess: pGameID at 0x{:X} is unreadable", pGameIdAddr);
-                    VehUtil::RestoreByte(pSpawnTarget, 0x48);
-                    ctx->EFlags |= 0x100;
-                    return EXCEPTION_CONTINUE_EXECUTION;
-                }
-
-                const char* exePath = reinterpret_cast<const char*>(ctx->Rdx);
-                const char* cmdLine = reinterpret_cast<const char*>(ctx->R8);
-                const char* workDir = reinterpret_cast<const char*>(ctx->R9);
-
-                if (!SafeValidateString(exePath)) exePath = nullptr;
-                if (!SafeValidateString(cmdLine)) cmdLine = nullptr;
-                if (!SafeValidateString(workDir)) workDir = nullptr;
-
-                AppId_t appId = static_cast<AppId_t>(gameIdVal & 0xFFFFFF);
-
-                VehUtil::RestoreByte(pSpawnTarget, 0x48);
-                ctx->EFlags |= 0x100;
-
-                bool hasDepot = LuaLoader::HasDepot(appId);
-                bool owned = LuaLoader::IsOwned(appId);
-                bool hasFlag = (cmdLine != nullptr) && HasExactFlag(cmdLine, "-onlinefix");
-                bool knownSteamStub = Ticket::IsKnownSteamDrmApp(appId);
-                ProtectionProbe::ScanResult steamStubProbe{};
-                if (hasDepot && !owned && !knownSteamStub && exePath) {
-                    steamStubProbe = ProtectionProbe::ScanBeforeSpawn(appId, exePath);
-                }
-                const bool probeSteamStub = steamStubProbe.valid && steamStubProbe.routeAccepted;
-                const bool detectedSteamStub = knownSteamStub || probeSteamStub;
-                const std::string steamStubSource = knownSteamStub ? "known-list" :
-                    (steamStubProbe.valid && steamStubProbe.detected ? "pre-spawn-probe" : "none");
-                const std::string steamStubMethod = knownSteamStub ? "known-list" :
-                    (steamStubProbe.valid ? steamStubProbe.method : "skipped");
-                const std::string steamStubImage = steamStubProbe.valid && steamStubProbe.detected
-                    ? steamStubProbe.imagePath
-                    : (exePath ? exePath : "");
-                bool autoSteamStubCandidate = hasDepot && !owned && !hasFlag && detectedSteamStub;
-                HookStatus::RecordSteamStubDetection(appId, steamStubSource, steamStubMethod,
-                                                     steamStubImage, steamStubProbe.candidates,
-                                                     detectedSteamStub,
-                                                     knownSteamStub ? "accepted" : steamStubProbe.routeReason);
-
-                LOG_MISC_INFO("SpawnProcess: hit appid={} hasDepot={} owned={} hasFlag={} autoSteamStubCandidate={} steamStubRouteAccepted={} steamStubRouteReason={} steamStubSource={} steamStubMethod={} steamStubImage=\"{}\" candidates={} exe=\"{}\" cmd=\"{}\"",
-                              appId, hasDepot, owned, hasFlag, autoSteamStubCandidate,
-                              detectedSteamStub,
-                              knownSteamStub ? "accepted" : steamStubProbe.routeReason,
-                              steamStubSource,
-                              steamStubMethod,
-                              steamStubImage,
-                              steamStubProbe.candidates,
-                              exePath ? exePath : "(null)",
-                              cmdLine ? cmdLine : "(null)");
-
-                Ticket::TicketPreflightResult ticketPreflight{};
-                if (hasDepot) {
-                    ticketPreflight = Ticket::EnsureRegistryTicketsForApp(appId, detectedSteamStub);
-                    LOG_MISC_INFO("SpawnProcess: ticketPreflight={} ticketStatus={} ticketSource={} sourceAppId={} changed={} knownSteamStub={} steamStubSource={} steamStubMethod={}",
-                                  Ticket::TicketPreflightActionName(ticketPreflight.action),
-                                  Ticket::AppTicketStatusName(ticketPreflight.ticketStatus),
-                                  Ticket::TicketPreflightSourceName(ticketPreflight.ticketSource),
-                                  ticketPreflight.sourceAppId,
-                                  ticketPreflight.changed,
-                                  ticketPreflight.knownSteamStub,
-                                  steamStubSource,
-                                  steamStubMethod);
-                }
-
-                bool steamStubAuto = SteamStubAuto::ShouldActivate(appId, hasDepot, owned,
-                                                                   hasFlag, detectedSteamStub);
-                bool missingSteamStubTicket =
-                    autoSteamStubCandidate
-                    && ticketPreflight.ticketSource == Ticket::TicketPreflightSource::Missing;
-                bool routeThrough480 = hasDepot && hasFlag;
-                const char* routeReason = hasFlag ? "manual-flag" :
-                                          (steamStubAuto ? "steamstub-auto" :
-                                           (missingSteamStubTicket ? "steamstub-ticket-missing" : "none"));
-                auto routeMode = hasFlag ? SteamCapture::OnlineFixRouteMode::ManualFlag
-                                          : SteamCapture::OnlineFixRouteMode::None;
-
-                if (routeThrough480) {
-                    SteamCapture::SetOnlineFixRoute(appId, routeMode);
-                    // Keep *pGameID as realAppId so Steam tracks process lifetime, UI Stop button, and playtime.
-                    LOG_MISC_INFO("SpawnProcess: OnlineFix route active reason={} routeMode={} appid={}, tracking real app",
-                                  routeReason, SteamCapture::OnlineFixRouteModeName(routeMode),
-                                  appId);
-                    SyncLanguageToSpacewar(appId);
-                    if (detectedSteamStub) {
-                        SteamStubAuto::Arm(appId, exePath, probeSteamStub ? steamStubProbe.imagePath : "");
-                        LOG_MISC_INFO("SpawnProcess: -onlinefix with SteamStub DRM, armed ticket handler");
-                    } else {
-                        SteamStubAuto::Clear();
-                    }
-                    OnlineFixInject::QueueInjection(exePath, appId);
-                } else if (steamStubAuto) {
-                    SteamCapture::SetOnlineFixRoute(0, SteamCapture::OnlineFixRouteMode::None);
-                    SteamStubAuto::Arm(appId, exePath, probeSteamStub ? steamStubProbe.imagePath : "");
-                    SafeWriteUint64(pGameID, kOnlineFixAppId);
-                    LOG_MISC_INFO("SpawnProcess: SteamStubAuto active reason={} appid {} -> {}, CGameID stays 480, overlay resolves real ticketSource={} sourceAppId={} steamStubSource={} steamStubMethod={} matchedImage=\"{}\"",
-                                  routeReason, appId, kOnlineFixAppId,
-                                  Ticket::TicketPreflightSourceName(ticketPreflight.ticketSource),
-                                  ticketPreflight.sourceAppId,
-                                  steamStubSource,
-                                  steamStubMethod,
-                                  probeSteamStub ? steamStubProbe.imagePath : "");
-                    if (missingSteamStubTicket) {
-                        LOG_MISC_WARN("SpawnProcess: SteamStubAuto ticket source missing for appid={}, route still active",
-                                      appId);
-                    }
-                } else {
-                    SteamCapture::SetOnlineFixRoute(0, SteamCapture::OnlineFixRouteMode::None);
-                    SteamStubAuto::Clear();
-                    if (missingSteamStubTicket) {
-                        LOG_MISC_WARN("SpawnProcess: steamstub-ticket-missing appid={} ticketPreflight={} ticketStatus={} ticketSource={}",
-                                      appId,
-                                      Ticket::TicketPreflightActionName(ticketPreflight.action),
-                                      Ticket::AppTicketStatusName(ticketPreflight.ticketStatus),
-                                      Ticket::TicketPreflightSourceName(ticketPreflight.ticketSource));
-                    }
-                    LOG_MISC_DEBUG("SpawnProcess: 480 route not activated for appid={} "
-                                   "(reason: {}{}{}{})",
-                                   appId,
-                                   !hasDepot ? "no-depot " : "",
-                                   owned ? "owned " : "",
-                                   !hasFlag && !autoSteamStubCandidate ? "no-flag " : "",
-                                   routeThrough480 ? "(internal)" : "");
-                }
-                return EXCEPTION_CONTINUE_EXECUTION;
             }
 
             // PID transfer bypass: intercepts steamclient64 InternalUpdateClientGame (RVA 0x9C33E9).
@@ -724,15 +713,6 @@ namespace {
             }
         }
 
-        if (pExInfo->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
-            uint8_t* pSpawnTarget = g_spawnProcessTarget.load(std::memory_order_acquire);
-            if (pSpawnTarget
-                && ctx->Rip == reinterpret_cast<uint64_t>(pSpawnTarget + 5)) {
-                VehUtil::ArmInt3(pSpawnTarget);
-                return EXCEPTION_CONTINUE_EXECUTION;
-            }
-        }
-
         return EXCEPTION_CONTINUE_SEARCH;
     }
 
@@ -780,15 +760,6 @@ namespace SteamCapture {
                        kAppDataStrSigs, std::size(kAppDataStrSigs));
         }
 
-        if (auto* _sp_ = ByteSearch(diversion_hModule, "SpawnProcess")) {
-            auto* target = static_cast<uint8_t*>(_sp_);
-            g_spawnProcessTarget.store(target, std::memory_order_release);
-            LOG_MISC_INFO("SpawnProcess: VEH trap armed @ 0x{:X}", reinterpret_cast<uintptr_t>(_sp_));
-            VehUtil::ArmInt3(_sp_);
-        } else {
-            LOG_MISC_WARN("SpawnProcess: ByteSearch returned null, VEH trap NOT armed");
-        }
-
         g_pidTransferCheckTarget = FindPidTransferCheckSite(diversion_hModule);
         if (g_pidTransferCheckTarget) {
             memcpy(g_pidTransferCheckOriginalBytes, g_pidTransferCheckTarget, sizeof(g_pidTransferCheckOriginalBytes));
@@ -815,7 +786,7 @@ namespace SteamCapture {
             LOG_MISC_WARN("PidTransferCheck: target not found, PID transfer bypass disabled");
         }
 
-        if (!g_captures.empty() || g_spawnProcessTarget.load(std::memory_order_acquire) || g_pidTransferCheckTarget) {
+        if (!g_captures.empty() || g_pidTransferCheckTarget) {
             g_vehActive.store(true, std::memory_order_release);
             g_vehHandle = AddVectoredExceptionHandler(1, VehHandler);
         }
@@ -831,19 +802,26 @@ namespace SteamCapture {
         LM_INSTALL(MarkLicenseAsChanged);
         LM_INSTALL(GetPackageInfo);
         LM_INSTALL(BuildSpawnEnvBlock);
+        LM_INSTALL(SpawnProcess);
         LM_TX_COMMIT();
 
         StartStartupInjectionRetry();
     }
 
     void Uninstall() {
-        g_vehActive.store(false, std::memory_order_release);
-        if (g_vehHandle) {
-            RemoveVectoredExceptionHandler(g_vehHandle);
-            g_vehHandle = nullptr;
-        }
+        // 1. Restore opcodes first so no FUTURE executions trigger 0xCC
+        VEH_CLEANUP_CAPTURES(g_captures);
 
-        // Drain all in-flight handlers with generous timeout (200 * 10ms = 2000ms)
+        if (g_pidTransferCheckTarget && *g_pidTransferCheckTarget == 0xCC)
+            VehUtil::RestoreByte(g_pidTransferCheckTarget, g_pidTransferCheckOriginalBytes[0]);
+
+        // Ensure CPU instruction pipeline sees restored opcodes immediately
+        FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
+
+        // Give a brief 10ms yield so any core already in kernel dispatch enters VehHandler
+        Sleep(10);
+
+        // 2. Drain in-flight handlers WHILE VEH IS STILL ACTIVE AND TARGETS ARE VALID
         bool drained = false;
         for (int i = 0; i < 200; ++i) {
             if (g_vehInFlight.load(std::memory_order_acquire) == 0) {
@@ -859,24 +837,25 @@ namespace SteamCapture {
             return;
         }
 
-        VEH_CLEANUP_CAPTURES(g_captures);
-
-        uint8_t* pSpawnTarget = g_spawnProcessTarget.exchange(nullptr, std::memory_order_acq_rel);
-        if (pSpawnTarget && *pSpawnTarget == 0xCC)
-            VehUtil::RestoreByte(pSpawnTarget, 0x48);
-
-        if (g_pidTransferCheckTarget && *g_pidTransferCheckTarget == 0xCC)
-            VehUtil::RestoreByte(g_pidTransferCheckTarget, g_pidTransferCheckOriginalBytes[0]);
+        // 3. Now that no handlers are running and no traps can occur, deactivate and unregister
+        g_vehActive.store(false, std::memory_order_release);
         g_pidTransferCheckTarget = nullptr;
         g_pidTransferCheckJumpTarget = 0;
         g_pidTransferCheckFallthroughTarget = 0;
         memset(g_pidTransferCheckOriginalBytes, 0, sizeof(g_pidTransferCheckOriginalBytes));
 
+        if (g_vehHandle) {
+            RemoveVectoredExceptionHandler(g_vehHandle);
+            g_vehHandle = nullptr;
+        }
+
+        // 4. Detours removal
         LM_TX_BEGIN();
         LM_REMOVE(GetAppIDForCurrentPipe);
         LM_REMOVE(MarkLicenseAsChanged);
         LM_REMOVE(GetPackageInfo);
         LM_REMOVE(BuildSpawnEnvBlock);
+        LM_REMOVE(SpawnProcess);
         LM_TX_COMMIT();
 
         VEH_TRACK_LIST(VEH_ZERO_RESOLVE)

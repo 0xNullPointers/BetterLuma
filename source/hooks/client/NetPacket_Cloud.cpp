@@ -15,8 +15,26 @@
 #include <vector>
 #include <cstring>
 #include <chrono>
+#include <atomic>
+#include <memory>
+#include <windows.h>
 
 namespace {
+
+    std::atomic<void*> g_lastRecvThis{nullptr};
+    std::atomic<HCONNECTION> g_lastConnection{0};
+    std::atomic<uint8_t*> g_lastNetBuf{nullptr};
+
+    std::mutex g_stagedMutex;
+    std::vector<std::vector<uint8_t>> g_stagedResponses;
+
+    std::atomic<int32_t> g_inFlightDispatches{0};
+    std::atomic<bool> g_dispatchShuttingDown{false};
+
+    struct DispatchContext {
+        std::vector<std::vector<uint8_t>> packets;
+        NetPacket::Handlers::Cloud::RecvDispatcher_t dispatch;
+    };
 
     struct PendingCloudResponse {
         uint32_t appId = 0;
@@ -82,6 +100,15 @@ namespace {
 
 namespace NetPacket::Handlers::Cloud {
 
+    void SetRecvContext(void* pThis, HCONNECTION hConn, uint8_t* pNetworkBuffer)
+    {
+        if (pThis) {
+            g_lastRecvThis.store(pThis, std::memory_order_release);
+            g_lastConnection.store(hConn, std::memory_order_release);
+            g_lastNetBuf.store(pNetworkBuffer, std::memory_order_release);
+        }
+    }
+
     bool HandleSend(const char* jobName,
                     const uint8_t* pBody, uint32_t cbBody,
                     const uint8_t* pHdr, uint32_t cbHdr)
@@ -129,36 +156,101 @@ namespace NetPacket::Handlers::Cloud {
             return false;
         }
 
-        std::vector<uint8_t> hdrBytes(cbRespHdr);
-        if (!respHdr.SerializeToArray(hdrBytes.data(), cbRespHdr))
+        std::vector<uint8_t> pkt(total);
+        auto* mhdr = reinterpret_cast<MsgHdr*>(pkt.data());
+        mhdr->eMsg = static_cast<EMsg>(static_cast<uint32_t>(k_EMsgServiceMethodResponse) | kMsgHdrProtoFlag);
+        mhdr->headerLength = cbRespHdr;
+        if (!respHdr.SerializeToArray(pkt.data() + sizeof(MsgHdr), cbRespHdr))
             return false;
-
-        std::vector<uint8_t> bodyBytes;
-        if (respLen > 0) {
-            bodyBytes.assign(respBuf, respBuf + respLen);
-        }
+        if (respLen > 0)
+            std::memcpy(pkt.data() + sizeof(MsgHdr) + cbRespHdr, respBuf, respLen);
 
         {
-            std::lock_guard<std::mutex> lk(g_pendingMutex);
-            auto now = std::chrono::steady_clock::now();
-            std::erase_if(g_pendingResponses, [&now](const auto& kv) {
-                return (now - kv.second.timestamp) > std::chrono::seconds(30);
-            });
-
-            if (jobId != 0) {
-                g_pendingResponses[jobId] = PendingCloudResponse{
-                    appId,
-                    jobName,
-                    std::move(hdrBytes),
-                    std::move(bodyBytes),
-                    now
-                };
+            std::lock_guard<std::mutex> lk(g_stagedMutex);
+            if (g_stagedResponses.size() < 64) {
+                g_stagedResponses.push_back(std::move(pkt));
             }
         }
 
-        LOG_NETPACKET_DEBUG("Cloud: handled {} app={} (jobId={}) -> prepared {}-byte response (eresult={})",
+        LOG_NETPACKET_DEBUG("Cloud: handled {} app={} (jobId={}) -> staged {}-byte wire response (eresult={})",
                             jobName, appId, jobId, total, eresult);
         return true;
+    }
+
+    void DispatchSynthesized(RecvDispatcher_t dispatch)
+    {
+        if (!dispatch) return;
+        if (g_dispatchShuttingDown.load(std::memory_order_acquire)) return;
+
+        std::vector<std::vector<uint8_t>> toDispatch;
+        {
+            std::lock_guard<std::mutex> lk(g_stagedMutex);
+            if (g_stagedResponses.empty()) return;
+            toDispatch = std::move(g_stagedResponses);
+            g_stagedResponses.clear();
+        }
+
+        auto* ctx = new DispatchContext{std::move(toDispatch), dispatch};
+        g_inFlightDispatches.fetch_add(1, std::memory_order_acq_rel);
+
+        BOOL queued = QueueUserWorkItem([](LPVOID param) -> DWORD {
+            std::unique_ptr<DispatchContext> c(static_cast<DispatchContext*>(param));
+            struct InFlightScope {
+                ~InFlightScope() {
+                    g_inFlightDispatches.fetch_sub(1, std::memory_order_acq_rel);
+                }
+            } scope;
+
+            // 1ms yield to let BBuildAndAsyncSendFrame complete and release transport locks
+            Sleep(1);
+
+            if (g_dispatchShuttingDown.load(std::memory_order_acquire))
+                return 0;
+
+            void* targetThis = g_lastRecvThis.load(std::memory_order_acquire);
+            for (int retry = 0; retry < 5 && !targetThis; ++retry) {
+                if (g_dispatchShuttingDown.load(std::memory_order_acquire))
+                    return 0;
+                Sleep(10);
+                targetThis = g_lastRecvThis.load(std::memory_order_acquire);
+            }
+
+            if (!targetThis) {
+                LOG_NETPACKET_WARN("Cloud: cannot dispatch synthesized response - receiver context (g_lastRecvThis) is null (offline/disconnected)");
+                return 0;
+            }
+
+            HCONNECTION hConn = g_lastConnection.load(std::memory_order_acquire);
+            uint8_t* pNetBuf = g_lastNetBuf.load(std::memory_order_acquire);
+
+            for (const auto& pkt : c->packets) {
+                if (g_dispatchShuttingDown.load(std::memory_order_acquire))
+                    break;
+                if (pkt.empty() || pkt.size() > NetPacket::kPktCap)
+                    continue;
+
+                CNetPacket carrier{};
+                carrier.m_hConnection = hConn;
+                carrier.m_pubData = const_cast<uint8_t*>(pkt.data());
+                carrier.m_cubData = static_cast<uint32_t>(pkt.size());
+                carrier.m_cRef = 1;
+                carrier.m_pubNetworkBuffer = pNetBuf;
+                carrier.m_pNext = nullptr;
+
+                if (c->dispatch(targetThis, &carrier)) {
+                    LOG_NETPACKET_DEBUG("Cloud: dispatched synthesized response ({} bytes) to oRecvPkt", pkt.size());
+                } else {
+                    LOG_NETPACKET_WARN("Cloud: failed to dispatch synthesized response ({} bytes)", pkt.size());
+                }
+            }
+            return 0;
+        }, ctx, WT_EXECUTEDEFAULT);
+
+        if (!queued) {
+            g_inFlightDispatches.fetch_sub(1, std::memory_order_acq_rel);
+            delete ctx;
+            LOG_NETPACKET_WARN("Cloud: QueueUserWorkItem failed (err={})", GetLastError());
+        }
     }
 
     bool HandleRecv(const CMsgProtoBufHeader& inHdr,
@@ -218,9 +310,34 @@ namespace NetPacket::Handlers::Cloud {
         return true;
     }
 
+    void DrainDispatches() {
+        g_dispatchShuttingDown.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lk(g_stagedMutex);
+            g_stagedResponses.clear();
+        }
+
+        // Drain in-flight worker dispatches before unhooking or unloading (up to 1000ms)
+        for (int i = 0; i < 200; ++i) {
+            if (g_inFlightDispatches.load(std::memory_order_acquire) == 0)
+                break;
+            Sleep(5);
+        }
+    }
+
+    void Init() {
+        g_dispatchShuttingDown.store(false, std::memory_order_release);
+    }
+
     void Reset() {
-        std::lock_guard<std::mutex> lk(g_pendingMutex);
-        g_pendingResponses.clear();
+        DrainDispatches();
+        {
+            std::lock_guard<std::mutex> lk(g_pendingMutex);
+            g_pendingResponses.clear();
+        }
+        g_lastRecvThis.store(nullptr, std::memory_order_release);
+        g_lastConnection.store(0, std::memory_order_release);
+        g_lastNetBuf.store(nullptr, std::memory_order_release);
     }
 
 } // namespace NetPacket::Handlers::Cloud

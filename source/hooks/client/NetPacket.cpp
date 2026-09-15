@@ -97,7 +97,7 @@ static void RouteOutboundDispatch(EMsg eMsg, const uint8_t* pBody, uint32_t cbBo
                 if (std::strcmp(jobName, "Cloud.SignalAppExitSyncDone#1") != 0 &&
                     std::strcmp(jobName, "Cloud.ClientConflictResolution#1") != 0) {
                     if (NetPacket::Handlers::Cloud::HandleSend(jobName, pBody, cbBody, pHdr, cbHdr)) {
-                        NetPacket::s_tx.SuppressSend = false;
+                        NetPacket::s_tx.SuppressSend = true;
                         return;
                     }
                 }
@@ -203,50 +203,13 @@ static void RouteInboundDispatch(EMsg eMsg, const uint8_t* pBody, uint32_t cbBod
 //  Hooks
 // ═══════════════════════════════════════════════════════════════════
 
-LM_HOOK(BBuildAndAsyncSendFrame, bool,
-        void* pObject, EWebSocketOpCode eWebSocketOpCode,
-        uint8_t* pubData, uint32_t cubData)
-{
-    if (eWebSocketOpCode != k_eWebSocketOpCode_Binary)
-        return oBBuildAndAsyncSendFrame(pObject, eWebSocketOpCode, pubData, cubData);
-
-    std::vector<uint8_t> patchedBuf;
-    uint8_t* sendBuf = pubData;
-    uint32_t sendSize = cubData;
-
-    {
-        std::lock_guard<std::mutex> lock(s_txLock);
-        EMsg eMsg;
-        const uint8_t *pHdr, *pBody;
-        uint32_t cbHdr, cbBody;
-        if (ParsePacket(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) {
-            RouteOutboundDispatch(eMsg, pBody, cbBody, pHdr, cbHdr);
-            if (NetPacket::s_tx.SuppressSend) {
-                return true;
-            }
-            if (NetPacket::s_tx.PatchBody) {
-                uint8_t* poolBuf = NetPacket::s_tx.Build(pubData, cbHdr, pHdr,
-                                                         NetPacket::s_tx.Body, NetPacket::s_tx.BodyLen,
-                                                         &sendSize);
-                if (poolBuf && sendSize > 0) {
-                    // Copy into thread-private buffer before releasing s_txLock.
-                    // This eliminates ring-buffer wrap races and TOCTOU use-after-free
-                    // while oBBuildAndAsyncSendFrame is actively consuming the frame.
-                    patchedBuf.assign(poolBuf, poolBuf + sendSize);
-                    sendBuf = patchedBuf.data();
-                } else {
-                    sendBuf = pubData;
-                    sendSize = cubData;
-                }
-            }
-        }
-    }
-
-    return oBBuildAndAsyncSendFrame(pObject, eWebSocketOpCode, sendBuf, sendSize);
-}
-
 LM_HOOK(RecvPkt, void*, void* pThis, CNetPacket* pPacket)
 {
+    if (pThis && pPacket) {
+        NetPacket::Handlers::Cloud::SetRecvContext(
+            pThis, pPacket->m_hConnection, pPacket->m_pubNetworkBuffer);
+    }
+
     RichPresence::DeliverPending(
         pThis, pPacket,
         [](void* pT, CNetPacket* pP) -> bool {
@@ -304,6 +267,52 @@ LM_HOOK(RecvPkt, void*, void* pThis, CNetPacket* pPacket)
     return ret;
 }
 
+LM_HOOK(BBuildAndAsyncSendFrame, bool,
+        void* pObject, EWebSocketOpCode eWebSocketOpCode,
+        uint8_t* pubData, uint32_t cubData)
+{
+    if (eWebSocketOpCode != k_eWebSocketOpCode_Binary)
+        return oBBuildAndAsyncSendFrame(pObject, eWebSocketOpCode, pubData, cubData);
+
+    std::vector<uint8_t> patchedBuf;
+    uint8_t* sendBuf = pubData;
+    uint32_t sendSize = cubData;
+
+    {
+        std::lock_guard<std::mutex> lock(s_txLock);
+        EMsg eMsg;
+        const uint8_t *pHdr, *pBody;
+        uint32_t cbHdr, cbBody;
+        if (ParsePacket(pubData, cubData, eMsg, pHdr, cbHdr, pBody, cbBody)) {
+            RouteOutboundDispatch(eMsg, pBody, cbBody, pHdr, cbHdr);
+            if (NetPacket::s_tx.SuppressSend) {
+                NetPacket::Handlers::Cloud::DispatchSynthesized(
+                    [](void* pT, CNetPacket* pP) -> bool {
+                        return oRecvPkt(pT, pP) != nullptr;
+                    });
+                return true;
+            }
+            if (NetPacket::s_tx.PatchBody) {
+                uint8_t* poolBuf = NetPacket::s_tx.Build(pubData, cbHdr, pHdr,
+                                                         NetPacket::s_tx.Body, NetPacket::s_tx.BodyLen,
+                                                         &sendSize);
+                if (poolBuf && sendSize > 0) {
+                    // Copy into thread-private buffer before releasing s_txLock.
+                    // This eliminates ring-buffer wrap races and TOCTOU use-after-free
+                    // while oBBuildAndAsyncSendFrame is actively consuming the frame.
+                    patchedBuf.assign(poolBuf, poolBuf + sendSize);
+                    sendBuf = patchedBuf.data();
+                } else {
+                    sendBuf = pubData;
+                    sendSize = cubData;
+                }
+            }
+        }
+    }
+
+    return oBBuildAndAsyncSendFrame(pObject, eWebSocketOpCode, sendBuf, sendSize);
+}
+
 // ── PacketPool method implementations ────────
 namespace NetPacket {
 
@@ -350,6 +359,7 @@ uint8_t* PacketPool<false>::Build(const uint8_t* pubData, uint32_t cbHdr, const 
 namespace NetPacket {
 
 void Install() {
+    NetPacket::Handlers::Cloud::Init();
     LM_TX_BEGIN();
     LM_INSTALL(BBuildAndAsyncSendFrame);
     LM_INSTALL(RecvPkt);
@@ -357,6 +367,7 @@ void Install() {
 }
 
 void Uninstall() {
+    NetPacket::Handlers::Cloud::DrainDispatches();
     LM_TX_BEGIN();
     LM_REMOVE(BBuildAndAsyncSendFrame);
     LM_REMOVE(RecvPkt);
