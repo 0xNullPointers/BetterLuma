@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.2
+
+### Process Injection & PE Loader Architecture
+- **Static Import Table Injection (`DetourUpdateProcessWithDll`)**: Replaced `CreateRemoteThread` DLL injection with Microsoft Detours PE import directory rewriting for newly spawned suspended processes. When the target process is resumed, the Windows loader (`ntdll!LdrpInitializeProcess`) natively maps `LumaCorePayload.dll` prior to application entry, completely eliminating deadlocks caused by remote threads stalling on uninitialized loader locks (`LdrpInitCompleteEvent`).
+- **Detour Helper Export & Ordinal Linking**: Conformed `LumaCorePayload.dll` to Detours loader specifications by exporting ordinal #1 (`DetourFinishHelperProcess`) and invoking `DetourRestoreAfterWith()` during `DLL_PROCESS_ATTACH`, ensuring clean unhooking of temporary import directory redirects upon load.
+- **Unicode & Non-ASCII Path Compatibility (8.3 Short Paths)**: Solved DLL load failures (`STATUS_DLL_NOT_FOUND` / `0xC0000135`) in environments where Steam or games are installed under non-ASCII or localized directory paths (e.g. non-English user profiles). Because PE import descriptor records (`IMAGE_IMPORT_DESCRIPTOR.Name`) strictly mandate 8-bit ASCII, paths are now automatically converted to NTFS 8.3 short paths (`GetShortPathNameW`), ensuring pure 7-bit ASCII compatibility across both primary and remote DLL deployment.
+- **Architecture Guarding (WOW64 Protection)**: Added target architecture validation to gracefully reject injection attempts into 32-bit (WOW64) processes, preventing invalid 64-to-32-bit PE import injections.
+
+### IPC Sandbox, Save Virtualization & TOCTOU Elimination
+- **Atomic Kernel Handle Verification**: Eliminated Time-of-Check to Time-of-Use (TOCTOU) race conditions in save file queries (`FileExists`, `GetFileSize`, `FileRead`). Replaced path-based `GetFileAttributesA` inspection with atomic file handle creation using `FILE_FLAG_OPEN_REPARSE_POINT`, followed by in-place attribute validation (`GetFileInformationByHandle`) directly on the acquired handle.
+- **Kernel-Level Sandbox Path Canonicalization**: Enforced sandbox containment via `GetFinalPathNameByHandleA` on the opened handle, verifying the resolved path strictly resides within the client's isolated save root and thwarting symlink or junction redirection attacks.
+- **Subdirectory Save File Support**: Upgraded save path sanitization to support nested subdirectories (required by Unreal Engine games, Cyberpunk 2077, Baldur's Gate 3, etc.) while maintaining strict protection against directory traversal sequences (`..`), absolute paths, UNC paths, drive specifiers, invalid characters, and DOS device names.
+- **Corrected 64-bit ABI for `IClientRemoteStorage::FileExists`**: Replaced an invalid 2-parameter signature and raw `0x38` memory offset mutation with Valve's authentic 64-bit ABI `(void* pThis, AppId_t appId, uint32_t fileRoot, const char* pchFile)`, eliminating struct corruption. Removed the obsolete and unsafe `IClientRemoteStorage::Dispatch` hook.
+
+### Hooking Engine & VEH Exception Lifecycle
+- **Conversion of `SpawnProcess` to Microsoft Detours**: Converted the fragile VEH software breakpoint (`INT3`) hook on `CClientEngine::SpawnProcess` to a native Microsoft Detours inline hook. This removes the overhead of CPU exception trapping and single-step context emulation during game launches.
+- **Safe VEH Drain & Shutdown Synchronization**: Resolved a fatal shutdown crash (`0x80000003` access violation) during DLL unload. Exception bytes are now restored, instruction caches flushed (`FlushInstructionCache`), and in-flight exception handlers drained (`g_vehInFlight == 0`) before unlinking the handler via `RemoveVectoredExceptionHandler`. Target pointers and capture contexts remain valid throughout the entire drain sequence.
+- **Dynamic Multi-Tier Register & PID Resolution**: Eliminated brittle register assumptions (`ctx->R15`) in the PID transfer check bypass. Implemented a dynamic resolution strategy that inspects candidate non-volatile CPU registers, verifies live process IDs via kernel handles, and cross-references active OnlineFix PID maps to reliably detect and bypass AppID mismatch branches across different compiler builds.
+
+### Network Packet Engine & Cloud Redirection
+- **Outbound Cloud Frame Suppression**: Ensured unauthorized DLC and App cloud sync requests are suppressed at the packet transmission boundary (`SuppressSend = true`), preventing unwanted cloud metadata queries from escaping to Valve CM servers.
+- **Type-Safe Synthetic Cloud RPC Dispatch**: Resolved a type confusion crash where websocket transport pointers (`CTransportWebSocket*`) were erroneously passed to `CNetFilter::RecvPkt`. Synthetic cloud RPC responses now strictly target the verified `CNetFilter` receiver instance (`g_lastRecvThis`).
+- **Threadpool-Backed Dispatch & Unload Draining**: Replaced ad-hoc detached OS thread creation with Windows threadpool tasks (`QueueUserWorkItem`). Added atomic dispatch counters (`g_inFlightDispatches`) and synchronous drain coordination (`DrainDispatches()`) during `NetPacket::Uninstall()`, preventing use-after-free crashes during shutdown.
+- **Atomic Frame Allocation**: Converted `FrameIdx` pool tracking in `NetPacket.cpp` to `std::atomic<uint32_t>`, guaranteeing thread-safe circular buffer slot allocation under high concurrency.
+
+### Multi-Game State & Concurrency Management
+- **Thread-Local Scoped Stats Context**: Replaced global atomic stats AppID tracking with thread-local pipe contexts (`thread_local HSteamPipe` / `thread_local AppId_t`) paired with a thread-safe pipe-to-AppID registry (`g_pipeToAppId`), preventing concurrent IPC threads from clobbering each other's active AppID.
+- **Fail-Closed Fallback Injection Security**: Hardened fallback process injection to fail closed: if the target process cannot be opened or its full image path cannot be queried via `QueryFullProcessImageNameW`, injection immediately aborts to prevent unauthorized code execution.
+- **Pending Route Inactivity Pruning**: Added `PrunePendingRoutesLocked` to automatically evict stale fallback routes with a 5-minute timeout and immediately purge routes whose associated processes have exited.
+- **Dead PID Eviction**: Implemented periodic process liveness polling via `GetExitCodeProcess` to clean up exited game PIDs from `g_onlineFixPidToAppId`, bounding memory growth.
+
+### Cryptographic Integrity & Platform Resiliency
+- **Cryptographic Ed25519 Verification for IPC Specs**: Integrated public-key signature verification into `IpcSpecLoader`. Remote IPC specifications fetched from mirrors are validated against `.sig` Ed25519 signatures (`PatternSig::Verify`), preventing MITM tampering and enforcing signature requirements (`require_signed`).
+- **Early 8.3 Short Path Conversion in Bootstrap**: Updated `Bootstrap::Run` to resolve the Steam installation directory to an 8.3 short path prior to reading `lumacore.toml`, ensuring reliable initialization in non-ASCII directory environments.
+- **Safe String Truncation**: Replaced legacy `strncpy` in language storage routines with safe bounds-checked `strncpy_s` using `_TRUNCATE`.
+
 ## v0.1
 
 ### OnlineFix Multi-Game Support & Process Retention
