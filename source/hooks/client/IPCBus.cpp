@@ -228,8 +228,24 @@ namespace {
         std::filesystem::path canonicalBase = std::filesystem::weakly_canonical(baseDir, ec);
         if (ec) return false;
 
-        std::filesystem::path canonicalTarget = std::filesystem::weakly_canonical(targetFile, ec);
-        if (ec) return false;
+        // Strictly reject symlinks, junctions, and non-regular files to prevent arbitrary file read/traversal
+        std::filesystem::path canonicalTarget;
+        if (std::filesystem::exists(targetFile, ec)) {
+            if (std::filesystem::is_symlink(targetFile, ec))
+                return false;
+
+            // For existing files, use canonical to strictly resolve all path components and symlinks
+            canonicalTarget = std::filesystem::canonical(targetFile, ec);
+            if (ec) return false;
+
+            // Ensure the resolved canonical target is a regular file (not directory, junction, or device)
+            if (!std::filesystem::is_regular_file(canonicalTarget, ec))
+                return false;
+        } else {
+            // Target does not exist yet (e.g. FileExists probing for uncreated saves)
+            canonicalTarget = std::filesystem::weakly_canonical(targetFile, ec);
+            if (ec) return false;
+        }
 
         // Verify that canonicalTarget is strictly a child under canonicalBase
         auto b = canonicalBase.begin();
@@ -323,7 +339,8 @@ namespace {
                                     };
 
                                 if (fHash == 0x376E83D6) {  // FileExists
-                                    if (GetFileAttributesA(savePath) != INVALID_FILE_ATTRIBUTES) {
+                                    DWORD attrs = GetFileAttributesA(savePath);
+                                    if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY) && !(attrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
                                         if (ensureCap(14)) {
                                             uint8_t frame[14] = {};
                                             uint32_t len = 14; memcpy(frame, &len, 4);
@@ -339,44 +356,52 @@ namespace {
                                         LOG_IPCRTR_INFO("\"evt\" \"SaveInject\" \"fn\" \"FileExists\" \"path\" \"{}\" \"result\" \"not-found\"", savePath);
                                     }
                                 } else if (fHash == 0xC69A678D) {  // GetFileSize
-                                    HANDLE hFile = CreateFileA(savePath, GENERIC_READ,
-                                        FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                        FILE_ATTRIBUTE_NORMAL, nullptr);
-                                    if (hFile != INVALID_HANDLE_VALUE) {
-                                        DWORD fileSize = GetFileSize(hFile, nullptr);
-                                        CloseHandle(hFile);
-                                        if (fileSize != INVALID_FILE_SIZE && ensureCap(14)) {
-                                            uint8_t frame[14] = {};
-                                            uint32_t len = 14; memcpy(frame, &len, 4);
-                                            uint32_t result = 0; memcpy(frame + 4, &result, 4);
-                                            memcpy(frame + 8, &fileSize, 4);
-                                            memcpy(pWrite->Base(), frame, 14);
-                                            pWrite->m_Put = 14;
-                                            LOG_IPCRTR_INFO("\"evt\" \"SaveInject\" \"fn\" \"GetFileSize\" \"path\" \"{}\" \"size\" {}", savePath, fileSize);
-                                            return true;
+                                    DWORD attrs = GetFileAttributesA(savePath);
+                                    if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY) && !(attrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                                        HANDLE hFile = CreateFileA(savePath, GENERIC_READ,
+                                            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                                        if (hFile != INVALID_HANDLE_VALUE) {
+                                            DWORD fileSize = GetFileSize(hFile, nullptr);
+                                            CloseHandle(hFile);
+                                            if (fileSize != INVALID_FILE_SIZE && ensureCap(14)) {
+                                                uint8_t frame[14] = {};
+                                                uint32_t len = 14; memcpy(frame, &len, 4);
+                                                uint32_t result = 0; memcpy(frame + 4, &result, 4);
+                                                memcpy(frame + 8, &fileSize, 4);
+                                                memcpy(pWrite->Base(), frame, 14);
+                                                pWrite->m_Put = 14;
+                                                LOG_IPCRTR_INFO("\"evt\" \"SaveInject\" \"fn\" \"GetFileSize\" \"path\" \"{}\" \"size\" {}", savePath, fileSize);
+                                                return true;
+                                            }
                                         }
                                     }
                                 } else if (fHash == 0xA0F6FDBD) {  // FileRead
-                                    HANDLE hFile = CreateFileA(savePath, GENERIC_READ,
-                                        FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                                        FILE_ATTRIBUTE_NORMAL, nullptr);
-                                    if (hFile != INVALID_HANDLE_VALUE) {
-                                        DWORD fileSize = GetFileSize(hFile, nullptr);
-                                        if (fileSize != INVALID_FILE_SIZE && fileSize < 1 * 1024 * 1024
-                                            && ensureCap(14u + fileSize)) {
-                                            uint8_t frame[14] = {};
-                                            uint32_t totalLen = 14 + fileSize; memcpy(frame, &totalLen, 4);
-                                            uint32_t result = 0; memcpy(frame + 4, &result, 4);
-                                            memcpy(frame + 8, &fileSize, 4);
-                                            memcpy(pWrite->Base(), frame, 14);
-                                            DWORD read = 0;
-                                            ReadFile(hFile, pWrite->Base() + 14, fileSize, &read, nullptr);
-                                            pWrite->m_Put = 14 + read;
+                                    DWORD attrs = GetFileAttributesA(savePath);
+                                    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY) || (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                                        LOG_IPCRTR_WARN("\"evt\" \"SaveInject\" \"fn\" \"FileRead\" \"err\" \"invalid-attributes\" \"path\" \"{}\"", savePath);
+                                    } else {
+                                        HANDLE hFile = CreateFileA(savePath, GENERIC_READ,
+                                            FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                                        if (hFile != INVALID_HANDLE_VALUE) {
+                                            DWORD fileSize = GetFileSize(hFile, nullptr);
+                                            if (fileSize != INVALID_FILE_SIZE && fileSize < 1 * 1024 * 1024
+                                                && ensureCap(14u + fileSize)) {
+                                                uint8_t frame[14] = {};
+                                                uint32_t totalLen = 14 + fileSize; memcpy(frame, &totalLen, 4);
+                                                uint32_t result = 0; memcpy(frame + 4, &result, 4);
+                                                memcpy(frame + 8, &fileSize, 4);
+                                                memcpy(pWrite->Base(), frame, 14);
+                                                DWORD read = 0;
+                                                ReadFile(hFile, pWrite->Base() + 14, fileSize, &read, nullptr);
+                                                pWrite->m_Put = 14 + read;
+                                                CloseHandle(hFile);
+                                                LOG_IPCRTR_INFO("\"evt\" \"SaveInject\" \"fn\" \"FileRead\" \"path\" \"{}\" \"size\" {} \"read\" {}", savePath, fileSize, read);
+                                                return true;
+                                            }
                                             CloseHandle(hFile);
-                                            LOG_IPCRTR_INFO("\"evt\" \"SaveInject\" \"fn\" \"FileRead\" \"path\" \"{}\" \"size\" {} \"read\" {}", savePath, fileSize, read);
-                                            return true;
                                         }
-                                        CloseHandle(hFile);
                                     }
                                 }
                                 }
