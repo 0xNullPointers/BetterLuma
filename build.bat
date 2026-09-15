@@ -50,7 +50,7 @@ if "%DO_CLEAN%"=="1" (
             >> "%LOG_FILE%" echo [WARN] First clean attempt failed, using PowerShell fallback...
             powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=[IO.Path]::GetFullPath('%BUILD_DIR%'); $root=[IO.Path]::GetFullPath('%~dp0'); if(-not $p.StartsWith($root,[StringComparison]::OrdinalIgnoreCase)){throw 'Refusing to delete outside LumaCore folder'}; for($i=1; $i -le 5 -and (Test-Path -LiteralPath $p); $i++){ try { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop } catch { Write-Host ('delete attempt '+$i+' failed: '+$_.Exception.Message); Start-Sleep -Milliseconds 500 } }; if(Test-Path -LiteralPath $p){ exit 1 }" >> "%LOG_FILE%" 2>&1
             if exist "%BUILD_DIR%\NUL" (
-                echo [ERROR] Failed to delete %BUILD_DIR% (file in use?)
+                echo [ERROR] Failed to delete %BUILD_DIR% [file in use]
                 echo [ERROR] See %LOG_FILE% for details.
                 if "%NO_PAUSE%"=="0" pause
                 exit /b 1
@@ -70,11 +70,20 @@ if !errorlevel! neq 0 (
         set "CMAKE_EXE=%ProgramFiles%\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
     )
     if not exist "!CMAKE_EXE!" (
-        echo [ERROR] cmake not found.
+        set "CMAKE_EXE=%ProgramFiles%\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    )
+    if not exist "!CMAKE_EXE!" (
+        set "CMAKE_EXE=%ProgramFiles%\Microsoft Visual Studio\2022\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    )
+    if not exist "!CMAKE_EXE!" (
+        set "CMAKE_EXE=%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    )
+    if not exist "!CMAKE_EXE!" (
+        echo [ERROR] cmake not found in PATH or Visual Studio 2022 installations.
         if "%NO_PAUSE%"=="0" pause
         exit /b 1
     )
-    echo [INFO] Using cmake from VS Build Tools: !CMAKE_EXE!
+    echo [INFO] Using cmake from Visual Studio: !CMAKE_EXE!
 )
 
 :: --- Pick generator -------------------------------------------------------
@@ -82,9 +91,14 @@ set "GENERATOR=Visual Studio 17 2022"
 set "GEN_ARGS=-A x64"
 where ninja >nul 2>&1
 if !errorlevel! == 0 (
-    set "GENERATOR=Ninja Multi-Config"
-    set "GEN_ARGS="
-    echo [INFO] Using Ninja Multi-Config generator
+    where cl >nul 2>&1
+    if !errorlevel! == 0 (
+        set "GENERATOR=Ninja Multi-Config"
+        set "GEN_ARGS="
+        echo [INFO] Using Ninja Multi-Config generator
+    ) else (
+        echo [INFO] Ninja found but cl.exe not in PATH, using Visual Studio 17 2022 generator
+    )
 ) else (
     echo [INFO] Using Visual Studio 17 2022 generator
 )
