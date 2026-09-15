@@ -325,14 +325,22 @@ namespace {
         if (!mem) return false;
 
         bool ok = false;
+        bool shouldFree = true;
         if (WriteProcessMemory(hProcess, mem, dllPath, bytes, nullptr)) {
             HANDLE t = CreateRemoteThread(hProcess, nullptr, 0, loadLib, mem, 0, nullptr);
             if (t) {
-                ok = (WaitForSingleObject(t, 5000) == WAIT_OBJECT_0);
+                DWORD waitRes = WaitForSingleObject(t, 3000);
+                ok = (waitRes == WAIT_OBJECT_0);
+                if (waitRes == WAIT_TIMEOUT) {
+                    LOG_ONLINEFIX_WARN("InjectPayload: remote LoadLibraryW timed out after 3s, retaining allocated buffer to avoid remote access violation");
+                    shouldFree = false;
+                }
                 CloseHandle(t);
             }
         }
-        VirtualFreeEx(hProcess, mem, 0, MEM_RELEASE);
+        if (shouldFree) {
+            VirtualFreeEx(hProcess, mem, 0, MEM_RELEASE);
+        }
         return ok;
     }
 
