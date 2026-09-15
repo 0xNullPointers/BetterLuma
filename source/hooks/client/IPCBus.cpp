@@ -134,29 +134,37 @@ namespace {
         }
     };
 
-    // Restore RemoteStorage hooks to cdf5c42 using active route real AppId.
-    LM_HOOK(IClientRemoteStorage_FileExists, bool, void* pThis, const char* pchFile)
-    {
-        uint32_t* pAppId = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(pThis) + 0x38);
-        uint32_t saved = *pAppId;
-        AppId_t real = SteamCapture::ActiveRouteRealAppId();
-        if (real && saved == kOnlineFixAppId)
-            *pAppId = real;
-        bool result = oIClientRemoteStorage_FileExists(pThis, pchFile);
-        *pAppId = saved;
-        return result;
-    }
+    // Type-safe enum matching Valve's ERemoteStorageFileRoot
+    enum ERemoteStorageFileRoot : uint32_t {
+        k_ERemoteStorageFileRootInvalid = static_cast<uint32_t>(-1),
+        k_ERemoteStorageFileRootDefault = 0,
+        k_ERemoteStorageFileRootGameInstall = 1,
+        k_ERemoteStorageFileRootWinMyDocuments = 2,
+        k_ERemoteStorageFileRootWinAppDataLocal = 3,
+        k_ERemoteStorageFileRootWinAppDataRoaming = 4,
+    };
 
-    LM_HOOK(IClientRemoteStorage_Dispatch, bool, void* pThis, void* pArg)
+    LM_HOOK(IClientRemoteStorage_FileExists, bool,
+            void* pThis, AppId_t appId, uint32_t fileRoot, const char* pchFile)
     {
-        uint32_t* pAppId = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(pThis) + 0x38);
-        uint32_t saved = *pAppId;
-        AppId_t real = SteamCapture::ActiveRouteRealAppId();
-        if (real && saved == kOnlineFixAppId)
-            *pAppId = real;
-        bool result = oIClientRemoteStorage_Dispatch(pThis, pArg);
-        *pAppId = saved;
-        return result;
+        if (!pchFile || !*pchFile) {
+            return false;
+        }
+
+        AppId_t targetAppId = appId;
+        const AppId_t real = SteamCapture::ActiveRouteRealAppId();
+        if (real && (appId == kOnlineFixAppId || SteamCapture::IsOnlineFixApp(appId))) {
+            targetAppId = real;
+            LOG_IPCRTR_INFO("\"evt\" \"RemoteStorage\" \"fn\" \"FileExists\" \"redirect\" \"{}->{}\" \"file\" \"{}\"",
+                            appId, targetAppId, pchFile);
+        }
+
+        if (!oIClientRemoteStorage_FileExists) {
+            LOG_IPCRTR_WARN("\"evt\" \"RemoteStorage\" \"fn\" \"FileExists\" \"err\" \"null-trampoline\"");
+            return false;
+        }
+
+        return oIClientRemoteStorage_FileExists(pThis, targetAppId, fileRoot, pchFile);
     }
 
     // Validates that the filename extracted from IPC is safe and does not contain
@@ -454,12 +462,6 @@ namespace IPCBus {
             };
             LM_INSTALL_STR(IClientRemoteStorage_FileExists, kFileExistsSigs, 1);
         }
-        {
-            static constexpr StringXRefSig kDispatchSigs[] = {
-                {"IClientRemoteStorage::Dispatch", ""},
-            };
-            LM_INSTALL_STR(IClientRemoteStorage_Dispatch, kDispatchSigs, 1);
-        }
         LM_TX_COMMIT();
 
         LOG_IPCRTR_INFO("\"event\" \"install\" \"hook\" \"0x{:X}\"",
@@ -470,7 +472,6 @@ namespace IPCBus {
         LM_TX_BEGIN();
         LM_REMOVE(IPCProcessMessage);
         LM_REMOVE(IClientRemoteStorage_FileExists);
-        LM_REMOVE(IClientRemoteStorage_Dispatch);
         LM_TX_COMMIT();
         oGetPipeClient = nullptr;
         Registry::Clear();
