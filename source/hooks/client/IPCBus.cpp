@@ -167,33 +167,21 @@ namespace {
         return oIClientRemoteStorage_FileExists(pThis, targetAppId, fileRoot, pchFile);
     }
 
-    // Validates that the filename extracted from IPC is safe and does not contain
-    // path separators, directory traversal, drive designators, or reserved device names.
+    // Validates that the relative save path extracted from IPC is safe and does not contain
+    // directory traversal, drive designators, stream colons, or reserved device names.
+    // Allows subdirectories (e.g. "saves/slot1.sav" or "Profiles\Player\Save.dat").
     static bool IsValidSaveFilename(std::string_view filename) {
-        if (filename.empty() || filename.size() >= 256)
+        if (filename.empty() || filename.size() >= 260)
             return false;
 
-        // Reject path separators, directory traversal sequences, and stream/drive colons
-        for (char c : filename) {
-            if (c == '/' || c == '\\' || c == ':')
-                return false;
-            // Reject non-printable ASCII or control characters
-            if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) == 0x7F)
-                return false;
-        }
-
-        if (filename.find("..") != std::string_view::npos)
+        // Cannot start with a path separator (no absolute / UNC paths)
+        if (filename.front() == '/' || filename.front() == '\\')
             return false;
 
-        // Windows forbids trailing dots and spaces in file names
-        if (filename.front() == '.' || filename.back() == '.' || filename.back() == ' ')
+        // Reject drive designators, alternate data streams, and directory traversal sequences
+        if (filename.find(':') != std::string_view::npos ||
+            filename.find("..") != std::string_view::npos) {
             return false;
-
-        // Reject Windows reserved DOS device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
-        auto baseName = filename;
-        auto dotPos = baseName.find('.');
-        if (dotPos != std::string_view::npos) {
-            baseName = baseName.substr(0, dotPos);
         }
 
         static constexpr std::string_view kReservedNames[] = {
@@ -202,17 +190,50 @@ namespace {
             "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
         };
 
-        for (const auto& reserved : kReservedNames) {
-            if (baseName.size() == reserved.size()) {
-                bool match = true;
-                for (size_t i = 0; i < baseName.size(); ++i) {
-                    if (toupper(static_cast<unsigned char>(baseName[i])) != reserved[i]) {
-                        match = false;
-                        break;
-                    }
+        // Validate each component between separators
+        size_t start = 0;
+        while (start < filename.size()) {
+            size_t end = filename.find_first_of("/\\", start);
+            if (end == std::string_view::npos)
+                end = filename.size();
+
+            std::string_view comp = filename.substr(start, end - start);
+            if (comp.empty())
+                return false; // consecutive slashes like "foo//bar" not allowed
+
+            // Windows forbids leading/trailing dots and spaces in path components
+            if (comp.front() == '.' || comp.back() == '.' || comp.back() == ' ')
+                return false;
+
+            for (char c : comp) {
+                // Reject non-printable ASCII or control characters, and Windows illegal filename characters
+                if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) == 0x7F ||
+                    c == '<' || c == '>' || c == '"' || c == '|' || c == '?' || c == '*') {
+                    return false;
                 }
-                if (match) return false;
             }
+
+            // Reject Windows reserved DOS device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+            auto baseName = comp;
+            auto dotPos = baseName.find('.');
+            if (dotPos != std::string_view::npos) {
+                baseName = baseName.substr(0, dotPos);
+            }
+
+            for (const auto& reserved : kReservedNames) {
+                if (baseName.size() == reserved.size()) {
+                    bool match = true;
+                    for (size_t i = 0; i < baseName.size(); ++i) {
+                        if (toupper(static_cast<unsigned char>(baseName[i])) != reserved[i]) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) return false;
+                }
+            }
+
+            start = end + 1;
         }
 
         return true;
@@ -266,11 +287,6 @@ namespace {
         }
 
         if (b != canonicalBase.end() || t == canonicalTarget.end())
-            return false;
-
-        // Ensure there is only 1 child component (direct file within remote/)
-        ++t;
-        if (t != canonicalTarget.end())
             return false;
 
         std::string safeStr = canonicalTarget.string();
@@ -362,11 +378,6 @@ namespace {
             ++t;
         }
         if (b != canonicalBase.end() || t == resolvedPath.end()) {
-            CloseHandle(h);
-            return false;
-        }
-        ++t;
-        if (t != resolvedPath.end()) {
             CloseHandle(h);
             return false;
         }

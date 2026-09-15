@@ -9,6 +9,7 @@
 #include "runtime/Logger.h"
 #include "runtime/RuntimeHttp.h"
 #include "config/Settings.h"
+#include "patterns/PatternSig.h"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -269,6 +270,37 @@ namespace IpcSpecLoader {
             LOG_MISC_DEBUG("IpcSpecLoader: fetching {}", url);
             auto resp = RuntimeHttp::Get(url);
             if (!resp.networkError && resp.status == 200 && !resp.body.empty()) {
+                if (resp.body.size() > kMaxBodyBytes) {
+                    errorOut = "body too large";
+                    return false;
+                }
+
+                // Cryptographic signature verification over downloaded IPC TOML spec
+                std::string sigUrl = url + ".sig";
+                LOG_MISC_DEBUG("IpcSpecLoader: fetching signature {}", sigUrl);
+                auto sigResp = RuntimeHttp::Get(sigUrl);
+                std::string_view sigBody;
+                if (!sigResp.networkError && sigResp.status == 200 && !sigResp.body.empty()) {
+                    sigBody = sigResp.body;
+                }
+
+                PatternSig::Result vr = PatternSig::Verify(resp.body, sigBody);
+                if (vr != PatternSig::Result::Ok) {
+                    const bool fatal = (vr == PatternSig::Result::BadSignature) ||
+                                       (vr == PatternSig::Result::InvalidShape) ||
+                                       Settings::patternRequireSigned;
+                    if (fatal) {
+                        LOG_MISC_WARN("IpcSpecLoader: signature verification failed for {}: {} (require_signed={})",
+                                      url, PatternSig::ResultToStr(vr),
+                                      Settings::patternRequireSigned ? "true" : "false");
+                        errorOut = std::string("sig-failed:") + PatternSig::ResultToStr(vr);
+                        return false;
+                    }
+
+                    LOG_MISC_WARN("IpcSpecLoader: accepted UNSIGNED IPC spec for {} (signature {})",
+                                  url, PatternSig::ResultToStr(vr));
+                }
+
                 bodyOut = std::move(resp.body);
                 sourceOut = "user-mirror";
                 return true;

@@ -73,8 +73,10 @@ namespace {
     std::atomic<uint32_t> g_vehInFlight{0};
     std::atomic<AppId_t>  g_OnlineFixRealAppId{0};
     std::atomic<uint32>   g_OnlineFixRouteMode{static_cast<uint32>(SteamCapture::OnlineFixRouteMode::None)};
-    std::atomic<HSteamPipe> g_StatsScopePipe{0};
-    std::atomic<AppId_t>  g_StatsScopeAppId{0};
+    thread_local HSteamPipe t_StatsScopePipe{0};
+    thread_local AppId_t   t_StatsScopeAppId{0};
+    std::mutex             g_pipeAppIdMutex;
+    std::unordered_map<HSteamPipe, AppId_t> g_pipeToAppId;
     thread_local uint32   g_userStatsAppIdOverrideDepth = 0;
     std::mutex                               g_gameNameCacheMutex;
     std::unordered_map<AppId_t, std::string> g_GameNameCache;
@@ -206,7 +208,7 @@ namespace {
     AppId_t ActiveRouteRealAppIdInternal() {
         if (SteamStubAuto::IsActive())
             return SteamStubAuto::RealAppId();
-        AppId_t statsId = g_StatsScopeAppId.load(std::memory_order_acquire);
+        AppId_t statsId = SteamCapture::StatsScopeAppId();
         if (statsId != 0)
             return statsId;
         return g_OnlineFixRealAppId.load(std::memory_order_acquire);
@@ -678,14 +680,52 @@ namespace {
                 AppId_t newAppId = static_cast<AppId_t>(newGameId & 0xFFFFFF);
                 uint64_t oldGameId = ctx->Rax;
                 AppId_t oldAppId = static_cast<AppId_t>(oldGameId & 0xFFFFFF);
-                uint32_t pid = static_cast<uint32_t>(ctx->R15);
+                // Robust multi-source and register-agnostic PID resolution:
+                // Do not blindly assume R15 strictly holds the target PID.
+                auto isLivePid = [](uint32_t p) -> bool {
+                    if (p == 0 || (p & 3) != 0 || p > 0x00400000) return false;
+                    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, p);
+                    if (h) {
+                        DWORD exitCode = 0;
+                        bool alive = GetExitCodeProcess(h, &exitCode) && (exitCode == STILL_ACTIVE);
+                        CloseHandle(h);
+                        return alive;
+                    }
+                    return false;
+                };
+
+                uint32_t pid = 0;
+                // 1. Check if R15 holds a PID already known for oldAppId or is a live process
+                uint32_t r15Val = static_cast<uint32_t>(ctx->R15);
+                if (r15Val && (SteamCapture::GetOnlineFixAppForPid(r15Val) == oldAppId || isLivePid(r15Val))) {
+                    pid = r15Val;
+                }
+
+                // 2. If R15 was not valid, check candidate registers (Rsi, Rbx, Rdx, Rcx, R8, R9, R12, R13, R14)
+                if (!pid) {
+                    const uint64_t candidates[] = { ctx->Rsi, ctx->Rbx, ctx->Rdx, ctx->Rcx, ctx->R8, ctx->R9, ctx->R12, ctx->R13, ctx->R14 };
+                    for (uint64_t c : candidates) {
+                        uint32_t candPid = static_cast<uint32_t>(c);
+                        if (candPid && SteamCapture::GetOnlineFixAppForPid(candPid) == oldAppId) {
+                            pid = candPid;
+                            break;
+                        }
+                    }
+                }
+
+                // 3. Fall back to finding any known active PID for oldAppId
+                if (!pid && oldAppId) {
+                    pid = SteamCapture::FindPidForOnlineFixApp(oldAppId);
+                }
+
+                // 4. If oldAppId is 0 but we resolved a PID, query oldAppId from the PID
+                if (!oldAppId && pid) {
+                    oldAppId = SteamCapture::GetOnlineFixAppForPid(pid);
+                }
 
                 uint64_t jumpTarget = g_pidTransferCheckJumpTarget;
                 uint64_t fallthroughTarget = g_pidTransferCheckFallthroughTarget;
 
-                if (!oldAppId && pid) {
-                    oldAppId = SteamCapture::GetOnlineFixAppForPid(pid);
-                }
                 // Verify if the process switching to 480 is an active OnlineFix title.
                 bool isOnlineFixNew = (newAppId == kOnlineFixAppId);
                 bool isOnlineFixOld = SteamCapture::IsOnlineFixApp(oldAppId)
@@ -695,7 +735,9 @@ namespace {
                               pid, oldAppId, oldGameId, newAppId, newGameId, isOnlineFixNew, isOnlineFixOld);
 
                 if (isOnlineFixNew && isOnlineFixOld) {
-                    SteamCapture::AssociateOnlineFixPid(pid, oldAppId);
+                    if (pid) {
+                        SteamCapture::AssociateOnlineFixPid(pid, oldAppId);
+                    }
                     LOG_MISC_INFO("PidTransferCheck: [BYPASS] OnlineFix PID {} switching to 480 from real AppId {} - preventing detachment! Continuing at +6 (0x{:X})",
                                   pid, oldAppId, fallthroughTarget);
                     ctx->Rip = fallthroughTarget;
@@ -861,7 +903,12 @@ namespace SteamCapture {
         VEH_TRACK_LIST(VEH_ZERO_RESOLVE)
         SetOnlineFixRoute(0, OnlineFixRouteMode::None);
         SteamStubAuto::Clear();
-        g_StatsScopePipe.store(0, std::memory_order_relaxed);
+        t_StatsScopePipe = 0;
+        t_StatsScopeAppId = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_pipeAppIdMutex);
+            g_pipeToAppId.clear();
+        }
         g_userStatsAppIdOverrideDepth = 0;
         g_steamEngine.store(nullptr, std::memory_order_release);
         {
@@ -1038,6 +1085,23 @@ namespace SteamCapture {
         return 0;
     }
 
+    uint32_t FindPidForOnlineFixApp(AppId_t realAppId) {
+        if (!realAppId) return 0;
+        std::scoped_lock lock(g_onlineFixMutex);
+        for (const auto& [pid, id] : g_onlineFixPidToAppId) {
+            if (id == realAppId) {
+                HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+                if (h) {
+                    DWORD exitCode = 0;
+                    bool alive = GetExitCodeProcess(h, &exitCode) && (exitCode == STILL_ACTIVE);
+                    CloseHandle(h);
+                    if (alive) return pid;
+                }
+            }
+        }
+        return 0;
+    }
+
     void DisassociateOnlineFixPid(uint32_t pid) {
         if (!pid) return;
         std::scoped_lock lock(g_onlineFixMutex);
@@ -1086,23 +1150,39 @@ namespace SteamCapture {
     }
 
     void EnterStatsScope(HSteamPipe pipe, AppId_t appId) {
-        g_StatsScopePipe.store(pipe, std::memory_order_release);
-        if (appId != 0) {
-            g_StatsScopeAppId.store(appId, std::memory_order_release);
+        t_StatsScopePipe = pipe;
+        t_StatsScopeAppId = appId;
+        if (pipe != 0 && appId != 0) {
+            std::lock_guard<std::mutex> lock(g_pipeAppIdMutex);
+            g_pipeToAppId[pipe] = appId;
         }
     }
 
     void LeaveStatsScope() {
-        g_StatsScopePipe.store(0, std::memory_order_release);
-        g_StatsScopeAppId.store(0, std::memory_order_release);
+        HSteamPipe pipe = t_StatsScopePipe;
+        t_StatsScopePipe = 0;
+        t_StatsScopeAppId = 0;
+        if (pipe != 0) {
+            std::lock_guard<std::mutex> lock(g_pipeAppIdMutex);
+            g_pipeToAppId.erase(pipe);
+        }
     }
 
     HSteamPipe StatsScopePipe() {
-        return g_StatsScopePipe.load(std::memory_order_acquire);
+        return t_StatsScopePipe;
     }
 
     AppId_t StatsScopeAppId() {
-        return g_StatsScopeAppId.load(std::memory_order_acquire);
+        if (t_StatsScopeAppId != 0)
+            return t_StatsScopeAppId;
+        HSteamPipe pipe = t_StatsScopePipe;
+        if (pipe != 0) {
+            std::lock_guard<std::mutex> lock(g_pipeAppIdMutex);
+            auto it = g_pipeToAppId.find(pipe);
+            if (it != g_pipeToAppId.end())
+                return it->second;
+        }
+        return 0;
     }
 
     void EnsureBufferSize(CUtlBuffer* pWrite, int32 size)

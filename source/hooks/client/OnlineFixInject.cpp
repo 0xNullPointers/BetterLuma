@@ -253,10 +253,44 @@ namespace {
         return true;
     }
 
+    static void PrunePendingRoutesLocked(uint64_t now) {
+        for (auto it = g_pendingRoutes.begin(); it != g_pendingRoutes.end();) {
+            bool expired = (now - it->second.queuedAt) > 300'000; // 5-minute hard timeout
+            if (!expired && (now - it->second.queuedAt) > 60'000) {
+                // If route has been active for >60s, check if all associated processes have exited
+                bool anyAlive = false;
+                for (uint32_t p : it->second.fallbackPids) {
+                    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, p);
+                    if (h) {
+                        DWORD exitCode = 0;
+                        if (GetExitCodeProcess(h, &exitCode) && exitCode == STILL_ACTIVE) {
+                            anyAlive = true;
+                        }
+                        CloseHandle(h);
+                    }
+                    if (anyAlive) break;
+                }
+                if (!anyAlive && !it->second.fallbackPids.empty()) {
+                    expired = true;
+                }
+            }
+            if (expired) {
+                LOG_ONLINEFIX_INFO("OnlineFix: pruned stale pending route for appid={}", it->first);
+                it = g_pendingRoutes.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     AppId_t ClaimFallbackRoute(uint32_t pid, std::string_view imageName, AppId_t expectedAppId) {
         std::wstring wide = WideFromUtf8(imageName);
         std::wstring key = LowerBasename(wide.c_str());
         std::lock_guard lk(g_queueLock);
+
+        uint64_t now = GetTickCount64();
+        PrunePendingRoutesLocked(now);
+
         if (g_pendingRoutes.empty()) {
             LOG_ONLINEFIX_DEBUG("fallback skip appid={} pid={} exe={} reason=no-pending",
                                 expectedAppId, pid, NarrowPath(key));
@@ -267,10 +301,13 @@ namespace {
             auto it = g_pendingRoutes.find(expectedAppId);
             if (it != g_pendingRoutes.end()) pRoute = &it->second;
         } else if (g_pendingRoutes.size() == 1) {
-            pRoute = &g_pendingRoutes.begin()->second;
+            auto& candidate = g_pendingRoutes.begin()->second;
+            if (!pid || !candidate.fallbackPids.contains(pid)) {
+                pRoute = &candidate;
+            }
         } else {
             for (auto& [id, r] : g_pendingRoutes) {
-                if (!r.fallbackPids.contains(pid)) {
+                if (!pid || !r.fallbackPids.contains(pid)) {
                     pRoute = &r;
                     break;
                 }
@@ -529,6 +566,7 @@ namespace OnlineFixInject {
         std::erase_if(g_queue, [now](const QueuedInjection& q) {
             return (now - q.queuedAt) > 60000;
         });
+        PrunePendingRoutesLocked(now);
 
         QueuedInjection q;
         q.appId = realAppId;
@@ -573,25 +611,40 @@ namespace OnlineFixInject {
             auto it = g_pendingRoutes.find(queuedAppId);
             if (it != g_pendingRoutes.end() && !it->second.expectedInstallDir.empty()) {
                 HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-                if (hProc) {
-                    wchar_t realImagePath[MAX_PATH * 2] = {};
-                    DWORD pathLen = static_cast<DWORD>(std::size(realImagePath));
-                    if (QueryFullProcessImageNameW(hProc, 0, realImagePath, &pathLen) && pathLen > 0) {
-                        std::wstring normReal = NormalizePath(realImagePath);
-                        bool valid = (normReal == it->second.expectedExePath) ||
-                                     IsSubpathOf(normReal, it->second.expectedInstallDir);
-                        if (!valid) {
-                            LOG_ONLINEFIX_WARN("SECURITY: Aborting fallback injection for appid={} pid={}: "
-                                               "process image \"{}\" is outside expected install dir \"{}\"",
-                                               queuedAppId, pid, NarrowPath(normReal),
-                                               NarrowPath(it->second.expectedInstallDir));
-                            CloseHandle(hProc);
-                            HookStatus::RecordOnlineFixPayload(queuedAppId, pid, ImageForLog(imageName),
-                                                               "fallback-failed", "security-reject");
-                            return false;
-                        }
-                    }
-                    CloseHandle(hProc);
+                if (!hProc) {
+                    LOG_ONLINEFIX_WARN("SECURITY: Aborting fallback injection for appid={} pid={}: "
+                                       "unable to open process for verification (err={})",
+                                       queuedAppId, pid, GetLastError());
+                    HookStatus::RecordOnlineFixPayload(queuedAppId, pid, ImageForLog(imageName),
+                                                       "fallback-failed", "security-open-failed");
+                    return false;
+                }
+
+                wchar_t realImagePath[MAX_PATH * 2] = {};
+                DWORD pathLen = static_cast<DWORD>(std::size(realImagePath));
+                bool queryOk = QueryFullProcessImageNameW(hProc, 0, realImagePath, &pathLen) && pathLen > 0;
+                CloseHandle(hProc);
+
+                if (!queryOk) {
+                    LOG_ONLINEFIX_WARN("SECURITY: Aborting fallback injection for appid={} pid={}: "
+                                       "unable to query process image name (err={})",
+                                       queuedAppId, pid, GetLastError());
+                    HookStatus::RecordOnlineFixPayload(queuedAppId, pid, ImageForLog(imageName),
+                                                       "fallback-failed", "security-query-failed");
+                    return false;
+                }
+
+                std::wstring normReal = NormalizePath(realImagePath);
+                bool valid = (normReal == it->second.expectedExePath) ||
+                             IsSubpathOf(normReal, it->second.expectedInstallDir);
+                if (!valid) {
+                    LOG_ONLINEFIX_WARN("SECURITY: Aborting fallback injection for appid={} pid={}: "
+                                       "process image \"{}\" is outside expected install dir \"{}\"",
+                                       queuedAppId, pid, NarrowPath(normReal),
+                                       NarrowPath(it->second.expectedInstallDir));
+                    HookStatus::RecordOnlineFixPayload(queuedAppId, pid, ImageForLog(imageName),
+                                                       "fallback-failed", "security-reject");
+                    return false;
                 }
             }
         }

@@ -36,6 +36,7 @@ namespace SteamCapture {
 
     void AssociateOnlineFixPid(uint32_t pid, AppId_t realAppId);
     AppId_t GetOnlineFixAppForPid(uint32_t pid);
+    uint32_t FindPidForOnlineFixApp(AppId_t realAppId);
     void DisassociateOnlineFixPid(uint32_t pid);
 
     void Install();
