@@ -312,7 +312,8 @@ uint8_t* PacketPool<true>::Replace(CNetPacket* p, const uint8_t* newHdr, uint32_
                                     const uint8_t* newBody, uint32_t cbNewBody) {
     uint32_t newSize = sizeof(MsgHdr) + cbNewHdr + cbNewBody;
     if (newSize > sizeof(Frame[0])) return nullptr;
-    uint8_t* buf = Frame[FrameIdx];
+    uint32_t slot = FrameIdx.fetch_add(1, std::memory_order_relaxed) % kPoolSlots;
+    uint8_t* buf = Frame[slot];
     const MsgHdr* orig = reinterpret_cast<const MsgHdr*>(p->m_pubData);
     MsgHdr* out = reinterpret_cast<MsgHdr*>(buf);
     out->eMsg         = orig->eMsg;
@@ -321,7 +322,6 @@ uint8_t* PacketPool<true>::Replace(CNetPacket* p, const uint8_t* newHdr, uint32_
     if (cbNewBody) memcpy(buf + sizeof(MsgHdr) + cbNewHdr, newBody, cbNewBody);
     p->m_pubData = buf;
     p->m_cubData = newSize;
-    FrameIdx = (FrameIdx + 1) % kPoolSlots;
     return buf;
 }
 
@@ -331,14 +331,14 @@ uint8_t* PacketPool<false>::Build(const uint8_t* pubData, uint32_t cbHdr, const 
                                    uint32_t* pNewSize) {
     *pNewSize = sizeof(MsgHdr) + cbHdr + cbNewBody;
     if (*pNewSize > sizeof(Frame[0])) return nullptr;
-    uint8_t* buf = Frame[FrameIdx];
+    uint32_t slot = FrameIdx.fetch_add(1, std::memory_order_relaxed) % kPoolSlots;
+    uint8_t* buf = Frame[slot];
     const MsgHdr* orig = reinterpret_cast<const MsgHdr*>(pubData);
     MsgHdr* out = reinterpret_cast<MsgHdr*>(buf);
     out->eMsg         = orig->eMsg;
     out->headerLength = cbHdr;
     memcpy(buf + sizeof(MsgHdr), pHdr, cbHdr);
     memcpy(buf + sizeof(MsgHdr) + cbHdr, newBody, cbNewBody);
-    FrameIdx = (FrameIdx + 1) % kPoolSlots;
     return buf;
 }
 

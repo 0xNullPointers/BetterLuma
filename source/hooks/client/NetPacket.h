@@ -9,6 +9,7 @@
 #include "Steam/Enums.h"
 #include "Steam/Structs.h"
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
@@ -43,8 +44,8 @@ public:
     bool     SuppressSend = false;
     uint32_t NewBodySize = 0;
 
-    uint8_t  Frame[kPoolSlots][kPktCap];
-    int      FrameIdx = 0;
+    uint8_t               Frame[kPoolSlots][kPktCap];
+    std::atomic<uint32_t> FrameIdx{0};
 
     uint8_t* Replace(CNetPacket* p, const uint8_t* newHdr, uint32_t cbNewHdr,
                      const uint8_t* newBody, uint32_t cbNewBody);

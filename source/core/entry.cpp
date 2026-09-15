@@ -142,15 +142,25 @@ namespace CoreInit {
             constexpr int kLoadRetries  = 25;
             constexpr int kRetryDelayMs = 120;
 
-            HMODULE hSelf = nullptr;
-            GetModuleHandleExA(
-                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                reinterpret_cast<LPCSTR>(&PrepareAndLoad), &hSelf);
-            if (!GetModuleFileNameA(hSelf, SteamInstallPath, MAX_PATH))
-                return false;
-            char* lastSlash = strrchr(SteamInstallPath, '\\');
-            if (lastSlash) *lastSlash = '\0';
+            if (SteamInstallPath[0] == '\0') {
+                HMODULE hSelf = nullptr;
+                GetModuleHandleExW(
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                    reinterpret_cast<LPCWSTR>(&PrepareAndLoad), &hSelf);
+                wchar_t wInstallPath[MAX_PATH] = {};
+                if (!GetModuleFileNameW(hSelf, wInstallPath, MAX_PATH))
+                    return false;
+                wchar_t* lastSlash = wcsrchr(wInstallPath, L'\\');
+                if (lastSlash) *lastSlash = L'\0';
+
+                wchar_t wShort[MAX_PATH] = {};
+                if (GetShortPathNameW(wInstallPath, wShort, MAX_PATH) > 0) {
+                    WideCharToMultiByte(CP_ACP, 0, wShort, -1, SteamInstallPath, MAX_PATH, nullptr, nullptr);
+                } else {
+                    WideCharToMultiByte(CP_ACP, 0, wInstallPath, -1, SteamInstallPath, MAX_PATH, nullptr, nullptr);
+                }
+            }
 
             sprintf_s(SteamclientPath, MAX_PATH, "%s\\steamclient64.dll",   SteamInstallPath);
             sprintf_s(DiversionPath,   MAX_PATH, "%s\\bin\\lcoverlay.dll",  SteamInstallPath);
@@ -226,9 +236,16 @@ namespace CoreInit {
             Logger::Init(selfModule);
 
             // Compute SteamInstallPath and ConfigPath early
-            if (GetModuleFileNameA(selfModule, SteamInstallPath, MAX_PATH)) {
-                char* ls = strrchr(SteamInstallPath, '\\');
-                if (ls) *ls = '\0';
+            wchar_t wSelf[MAX_PATH] = {};
+            if (GetModuleFileNameW(selfModule, wSelf, MAX_PATH)) {
+                wchar_t* ls = wcsrchr(wSelf, L'\\');
+                if (ls) *ls = L'\0';
+                wchar_t wShort[MAX_PATH] = {};
+                if (GetShortPathNameW(wSelf, wShort, MAX_PATH) > 0) {
+                    WideCharToMultiByte(CP_ACP, 0, wShort, -1, SteamInstallPath, MAX_PATH, nullptr, nullptr);
+                } else {
+                    WideCharToMultiByte(CP_ACP, 0, wSelf, -1, SteamInstallPath, MAX_PATH, nullptr, nullptr);
+                }
             }
             sprintf_s(ConfigPath, MAX_PATH, "%s\\lumacore.toml", SteamInstallPath);
 

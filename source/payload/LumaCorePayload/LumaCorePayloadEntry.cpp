@@ -8,8 +8,13 @@
 #include "PayloadPropagator.h"
 
 #include <windows.h>
+#include <detours.h>
 #include <psapi.h>
 #include <string>
+
+// Detours requires any injected DLL to export ordinal #1 so the Windows loader
+// can link to it when loading the target process imports.
+#pragma comment(linker, "/export:DetourFinishHelperProcess,@1,NONAME")
 
 namespace {
 
@@ -72,6 +77,7 @@ namespace {
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
+        DetourRestoreAfterWith();
         DisableThreadLibraryCalls(hModule);
         if (HANDLE h = CreateThread(nullptr, 0, PayloadMain, hModule, 0, nullptr))
             CloseHandle(h);

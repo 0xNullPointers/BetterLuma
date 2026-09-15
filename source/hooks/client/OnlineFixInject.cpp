@@ -309,39 +309,62 @@ namespace {
     CreateProcessW_t       oCreateProcessW       = nullptr;
     CreateProcessAsUserW_t oCreateProcessAsUserW = nullptr;
 
-    // Inline injection matching RemoteInject::LoadDll - VirtualAllocEx +
-    // CreateRemoteThread(LoadLibraryW). Uses the process HANDLE from
-    // CreateProcess directly (no extra OpenProcess).
-    static bool InjectPayload(HANDLE hProcess, LPCWSTR dllPath) {
-        HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
-        if (!k32) return false;
-        auto loadLib = reinterpret_cast<LPTHREAD_START_ROUTINE>(
-            GetProcAddress(k32, "LoadLibraryW"));
-        if (!loadLib) return false;
+    // Injects LumaCorePayload.dll into a newly spawned, suspended process.
+    // Uses DetourUpdateProcessWithDll to update the PE import directory of the
+    // target process directly in memory. When the process's primary thread is resumed,
+    // ntdll!LdrpInitializeProcess loads the payload natively before any application
+    // code runs. This avoids CreateRemoteThread, which deadlocks on suspended processes
+    // waiting on uninitialized loader locks (LdrpInitCompleteEvent).
+    static bool InjectPayload(HANDLE hProcess, const char* dllPath) {
+        if (!hProcess || !dllPath || !dllPath[0]) return false;
 
-        const SIZE_T bytes = (wcslen(dllPath) + 1) * sizeof(wchar_t);
-        void* mem = VirtualAllocEx(hProcess, nullptr, bytes,
-            MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (!mem) return false;
+        BOOL isWow64 = FALSE;
+        if (IsWow64Process(hProcess, &isWow64) && isWow64) {
+            LOG_ONLINEFIX_WARN("InjectPayload: target process is 32-bit (WOW64); "
+                               "64-bit payload cannot be loaded");
+            return false;
+        }
 
-        bool ok = false;
-        bool shouldFree = true;
-        if (WriteProcessMemory(hProcess, mem, dllPath, bytes, nullptr)) {
-            HANDLE t = CreateRemoteThread(hProcess, nullptr, 0, loadLib, mem, 0, nullptr);
-            if (t) {
-                DWORD waitRes = WaitForSingleObject(t, 3000);
-                ok = (waitRes == WAIT_OBJECT_0);
-                if (waitRes == WAIT_TIMEOUT) {
-                    LOG_ONLINEFIX_WARN("InjectPayload: remote LoadLibraryW timed out after 3s, retaining allocated buffer to avoid remote access violation");
-                    shouldFree = false;
+        // Convert path to 8.3 short path to ensure it consists strictly of 7-bit ASCII characters.
+        // According to the Microsoft PE/COFF specification, IMAGE_IMPORT_DESCRIPTOR.Name is an
+        // 8-bit null-terminated string. If the path contains non-ASCII characters outside the active
+        // Windows code page, WideCharToMultiByte replaces them with '?', causing ntdll!LdrpLoadDll
+        // to fail with STATUS_DLL_NOT_FOUND (0xC0000135). An NTFS 8.3 short path guarantees 7-bit ASCII.
+        char shortPath[MAX_PATH] = {};
+        std::wstring wDllPath = WideFromUtf8(dllPath);
+        if (!wDllPath.empty()) {
+            wchar_t wShort[MAX_PATH] = {};
+            if (GetShortPathNameW(wDllPath.c_str(), wShort, MAX_PATH) > 0) {
+                if (WideCharToMultiByte(CP_ACP, 0, wShort, -1, shortPath, sizeof(shortPath), nullptr, nullptr) > 0) {
+                    dllPath = shortPath;
                 }
-                CloseHandle(t);
             }
         }
-        if (shouldFree) {
-            VirtualFreeEx(hProcess, mem, 0, MEM_RELEASE);
+        if (dllPath != shortPath) {
+            if (GetShortPathNameA(dllPath, shortPath, sizeof(shortPath)) > 0) {
+                dllPath = shortPath;
+            } else if (GetFullPathNameA(dllPath, sizeof(shortPath), shortPath, nullptr) > 0) {
+                dllPath = shortPath;
+            }
         }
-        return ok;
+
+        if (GetFileAttributesA(dllPath) == INVALID_FILE_ATTRIBUTES) {
+            LOG_ONLINEFIX_WARN("InjectPayload: payload DLL missing: \"{}\"", dllPath);
+            return false;
+        }
+
+        if (strchr(dllPath, '?') != nullptr) {
+            LOG_ONLINEFIX_WARN("InjectPayload: payload path contains unmappable Unicode characters: \"{}\"", dllPath);
+            return false;
+        }
+
+        LPCSTR rlpDlls[1] = { dllPath };
+        if (!DetourUpdateProcessWithDll(hProcess, rlpDlls, 1)) {
+            DWORD err = GetLastError();
+            LOG_ONLINEFIX_WARN("InjectPayload: DetourUpdateProcessWithDll failed err={}", err);
+            return false;
+        }
+        return true;
     }
 
     BOOL LaunchSuspended(HANDLE token, LPCWSTR app, LPWSTR cmd, LPSECURITY_ATTRIBUTES pa,
@@ -394,8 +417,7 @@ namespace {
             }
         }
 
-        std::wstring wPayload = WideFromUtf8(PayloadPath);
-        bool injected = (!wPayload.empty()) && InjectPayload(pi->hProcess, wPayload.c_str());
+        bool injected = (PayloadPath[0] != 0) && InjectPayload(pi->hProcess, PayloadPath);
         // Associate newly spawned primary process PID with its OnlineFix app.
         if (pi && pi->dwProcessId) {
             SteamCapture::AssociateOnlineFixPid(pi->dwProcessId, appId);

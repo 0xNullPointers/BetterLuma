@@ -1021,6 +1021,25 @@ namespace SteamCapture {
     void AssociateOnlineFixPid(uint32_t pid, AppId_t realAppId) {
         if (!pid || !realAppId) return;
         std::scoped_lock lock(g_onlineFixMutex);
+
+        // Prune dead processes to prevent unbounded map growth across long Steam sessions
+        if (g_onlineFixPidToAppId.size() > 32) {
+            for (auto it = g_onlineFixPidToAppId.begin(); it != g_onlineFixPidToAppId.end();) {
+                HANDLE h = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, it->first);
+                if (!h) {
+                    it = g_onlineFixPidToAppId.erase(it);
+                } else {
+                    DWORD exitCode = 0;
+                    if (GetExitCodeProcess(h, &exitCode) && exitCode != STILL_ACTIVE) {
+                        it = g_onlineFixPidToAppId.erase(it);
+                    } else {
+                        ++it;
+                    }
+                    CloseHandle(h);
+                }
+            }
+        }
+
         g_onlineFixPidToAppId[pid] = realAppId;
         if (g_onlineFixAppEntries.find(realAppId) == g_onlineFixAppEntries.end()) {
             auto& entry = g_onlineFixAppEntries[realAppId];
