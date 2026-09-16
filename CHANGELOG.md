@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.3
+
+### Startup Synchronization & Race Elimination (Loader Gate)
+- **Kernel-Level Loader Gate (`LoaderGate`)**: Implemented a synchronization gate hooking `kernelbase.dll!LoadLibraryExW` using Microsoft Detours during `DLL_PROCESS_ATTACH`. Any host thread attempting to load `steamclient64.dll` or `steamui.dll` is held on a kernel event (`g_hBootstrapReadyEvent`) until LumaCore's background initialization, pattern fetching, and critical hooks are fully operational.
+- **Cold-Start Race Condition Elimination**: Solved the critical race condition where first-time launches without cached pattern TOMLs failed to hook Steam or capture Package 0. By gating the host process while network pattern downloads complete, `steamui.dll` is prevented from loading the unhooked `steamclient64.dll` ahead of LumaCore.
+- **Zero-Latency Fast Path for Cached Launches**: When pattern TOMLs are already cached locally, initialization finishes in under 800 ms—well before Steam attempts to map its UI libraries. The event gate signals immediately, ensuring subsequent launches run with 0 ms hold latency.
+- **Automatic Transparent Module Diversion**: Gated `steamclient64.dll` load requests are automatically diverted to `bin\lcoverlay.dll` with fallback ref-counting on `diversion_hModule`, ensuring all UI and internal client components operate on the hooked overlay binary.
+
+### Pattern Fetcher & On-Disk Ingestion
+- **Synchronous On-Disk Module Hashing (`LoadForPath`)**: Decoupled `PatternFetcher` from active in-memory module handles (`HMODULE`). LumaCore can now hash and download patterns for `<SteamInstallPath>\steamui.dll` directly from disk during bootstrap alongside `steamclient64.dll`, eliminating circular startup dependencies.
+- **Instant In-Memory Module Association (`AssociateModule`)**: Introduced fast module-to-pattern association, binding live `steamui.dll` module handles to pre-fetched on-disk pattern tables instantaneously upon load with zero network overhead.
+- **Accelerated Fallback Retry Loop**: Reduced the deferred SteamUI retry loop polling interval from 500 ms to 20 ms, minimizing attach latency in the event of asynchronous late mapping.
+
+### SteamUI Hook Resiliency & Diversion Hardening
+- **Path-Agnostic Basename Normalization**: Replaced strict exact string matching in `LoadModuleWithPath` with robust case-insensitive basename parsing (`IsSteamClient64`), properly handling absolute paths, relative paths, forward/backward slashes, and case variations.
+- **Datafile Mapping Guard**: Filtered out `LOAD_LIBRARY_AS_DATAFILE`, `LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE`, and `LOAD_LIBRARY_AS_IMAGE_RESOURCE` flags in the loader gate, preventing unwanted hook attachment when modules are mapped as non-executable resources.
+- **Thread-Safe Worker Bypass**: Registered the background initialization thread ID (`g_initThreadId`) to bypass the loader gate completely, preventing self-deadlocks during `Diversion::PrepareAndLoad`.
+
+### Build System & Version Management
+- **Dynamic Release Versioning**: Streamlined CMake version resolution to consume `RELEASE_VERSION` directly from environment variables and Git tags without hardcoded or misleading fallback version strings.
+- **Clean Debug Stamp Identification**: Properly isolates local development and debug builds, annotating them with clean build stamps rather than static release version metadata.
+- **Release Logging Sanitization**: Hardened per-channel logging macros to compile down to `((void)0)` under Release configurations, guaranteeing zero runtime overhead and clean compilation across all build profiles.
+
 ## v0.2
 
 ### Process Injection & PE Loader Architecture
