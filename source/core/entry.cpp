@@ -4,6 +4,7 @@
 // Original work and copyright: see README.md.
 
 #include "core/entry.h"
+#include "core/LoaderGate.h"
 #include "core/Orchestrator.h"
 #include "hooks/capture/RuntimeCapture.h"
 #include "hooks/client/PackagePatch.h"
@@ -73,14 +74,16 @@ namespace CoreInit {
                 return;
             }
 
-            PatternFetcher::PatternResult r{};
-            bool expected = false;
-            if (g_steamUiPatternDispatched.compare_exchange_strong(expected, true)) {
-                r = PatternFetcher::LoadFor(ui, "steamui");
-            } else {
-                r = PatternFetcher::Get(ui);
-                if (r.sha.empty() || (!r.ok && (r.source.empty() || r.source == "none")))
+            PatternFetcher::AssociateModule(ui, "steamui");
+            PatternFetcher::PatternResult r = PatternFetcher::Get(ui);
+            if (!r.ok) {
+                bool expected = false;
+                if (g_steamUiPatternDispatched.compare_exchange_strong(expected, true)) {
                     r = PatternFetcher::LoadFor(ui, "steamui");
+                } else {
+                    if (r.sha.empty() || (!r.ok && (r.source.empty() || r.source == "none")))
+                        r = PatternFetcher::LoadFor(ui, "steamui");
+                }
             }
 
             LOG_COREIN_INFO("\"stage\" \"Patterns\" \"module\" \"steamui\" \"deferred\" 1 \"sha\" \"{}\" \"entries\" {} \"ok\" {}",
@@ -105,7 +108,7 @@ namespace CoreInit {
                         return 0;
                     }
                     HookStatus::RecordSteamUiLateRetry("bootstrap-late-retry:waiting-module");
-                    Sleep(500);
+                    Sleep(20);
                 }
                 HookStatus::SetSteamUiAttachState("steamui-not-loaded-after-retry", 60, false);
                 HookStatus::RecordSteamUiLateRetry("bootstrap-late-retry:timeout");
@@ -164,6 +167,7 @@ namespace CoreInit {
             }
 
             sprintf_s(SteamclientPath, MAX_PATH, "%s\\steamclient64.dll",   SteamInstallPath);
+            sprintf_s(SteamuiPath,     MAX_PATH, "%s\\steamui.dll",         SteamInstallPath);
             sprintf_s(DiversionPath,   MAX_PATH, "%s\\bin\\lcoverlay.dll",  SteamInstallPath);
             sprintf_s(LuaDir,          MAX_PATH, "%s\\config\\stplug-in",   SteamInstallPath);
             sprintf_s(ConfigPath,      MAX_PATH, "%s\\lumacore.toml",       SteamInstallPath);
@@ -234,6 +238,7 @@ namespace CoreInit {
         // separate thread lets us do all of that safely once the loader lock is released.
         DWORD Run(HMODULE selfModule)
         {
+            LoaderGate::SetInitThreadId(GetCurrentThreadId());
             Logger::Init(selfModule);
 
             // Compute SteamInstallPath and ConfigPath early
@@ -248,7 +253,10 @@ namespace CoreInit {
                     WideCharToMultiByte(CP_ACP, 0, wSelf, -1, SteamInstallPath, MAX_PATH, nullptr, nullptr);
                 }
             }
-            sprintf_s(ConfigPath, MAX_PATH, "%s\\lumacore.toml", SteamInstallPath);
+            sprintf_s(ConfigPath,      MAX_PATH, "%s\\lumacore.toml",       SteamInstallPath);
+            sprintf_s(SteamclientPath, MAX_PATH, "%s\\steamclient64.dll",   SteamInstallPath);
+            sprintf_s(SteamuiPath,     MAX_PATH, "%s\\steamui.dll",         SteamInstallPath);
+            sprintf_s(DiversionPath,   MAX_PATH, "%s\\bin\\lcoverlay.dll",  SteamInstallPath);
 
             // Load config and init ALL module loggers before any LOG_COREIN_* call
             Settings::Load(ConfigPath);
@@ -268,6 +276,7 @@ namespace CoreInit {
                 HookStatus::SetTomlAvailability("steamclient", false);
                 HookStatus::SetTomlAvailability("steamui", false);
                 HookStatus::WriteToDisk();
+                LoaderGate::SignalBootstrapReady();
                 return 1;
             }
 
@@ -283,20 +292,16 @@ namespace CoreInit {
             PackagePatch::Install();
             SteamCapture::Install();
 
-            // ── Steamui leg ──────────────────────────────────────────
-            PatternFetcher::PatternResult puResult{};
-            bool steamUiMapped = (GetModuleHandleA("steamui.dll") != nullptr);
-            if (steamUiMapped) {
-                bool expected = false;
-                if (g_steamUiPatternDispatched.compare_exchange_strong(expected, true)) {
-                    puResult = PatternFetcher::LoadFor(
-                        GetModuleHandleA("steamui.dll"), "steamui");
-                    LOG_COREIN_INFO("\"stage\" \"Patterns\" \"module\" \"steamui\" \"sha\" \"{}\" \"entries\" {} \"ok\" {}",
-                               puResult.sha.empty() ? "<unknown>" : puResult.sha,
-                               static_cast<unsigned>(puResult.entries.size()),
-                               puResult.ok ? 1 : 0);
-                }
-            } else {
+            // ── Steamui leg: synchronous cache + network from on-disk binary ─────────
+            wchar_t wSteamuiPath[MAX_PATH] = {};
+            MultiByteToWideChar(CP_ACP, 0, SteamuiPath, -1, wSteamuiPath, MAX_PATH);
+            PatternFetcher::PatternResult puResult =
+                PatternFetcher::LoadForPath(wSteamuiPath, "steamui", GetModuleHandleA("steamui.dll"));
+            LOG_COREIN_INFO("\"stage\" \"Patterns\" \"module\" \"steamui\" \"sha\" \"{}\" \"entries\" {} \"ok\" {}",
+                       puResult.sha.empty() ? "<unknown>" : puResult.sha,
+                       static_cast<unsigned>(puResult.entries.size()),
+                       puResult.ok ? 1 : 0);
+            if (!puResult.ok) {
                 LOG_COREIN_INFO("\"stage\" \"Patterns\" \"module\" \"steamui\" \"act\" \"deferred\"");
                 Patterns::StartSteamUiLateRetryLoop();
             }
@@ -350,6 +355,7 @@ namespace CoreInit {
             HookStatus::SetStartupPhase("hooks_complete");
             HookStatus::WriteToDisk();
             LOG_COREIN_INFO("\"stage\" \"Bootstrap\" \"act\" \"complete\"");
+            LoaderGate::SignalBootstrapReady();
             return 0;
         }
 
@@ -375,6 +381,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
                 reinterpret_cast<LPCSTR>(&DllMain), &selfPin)) {
             LOG_COREIN_WARN("\"stage\" \"DllMain\" \"err\" \"pin-fail\" err={}", GetLastError());
         }
+        LoaderGate::Install();
         // Start Bootstrap::Run on a worker thread to do all real work
         // outside the loader lock.
         // DllMain must return quickly and must not call LoadLibrary, open files,
@@ -382,9 +389,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
         g_InitThread = CreateThread(nullptr, 0, [](LPVOID param) -> DWORD {
             return CoreInit::Bootstrap::Run(static_cast<HMODULE>(param));
         }, hModule, 0, nullptr);
+        if (g_InitThread) {
+            LoaderGate::SetInitThreadId(GetThreadId(g_InitThread));
+        }
     }
     else if (dwReason == DLL_PROCESS_DETACH)
     {
+        LoaderGate::Uninstall();
 #ifdef LUMACORE_DIAGNOSTICS_ENABLED
         // A16 belt-and-suspenders: flush the achievement diagnostic ring
         // first thing on DLL detach so a crash inside CoreLoader::Detach

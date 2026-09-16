@@ -72,6 +72,16 @@ namespace PatternFetcher {
     // <sha>.toml since the SHA is unique per module on disk.
     PatternResult LoadFor(HMODULE moduleHandle, const char* subdir);
 
+    // Runs the cache-first / network-fallback load chain directly using an on-disk binary path.
+    // Hashes diskPathW, checks local cache, or fetches from network, and installs entries
+    // into the pattern map for subdir ("steamclient" or "steamui").
+    // If moduleHandle is non-null, associates the result with moduleHandle in Get().
+    PatternResult LoadForPath(const std::wstring& diskPathW, const char* subdir, HMODULE moduleHandle = nullptr);
+
+    // Associates an already-loaded result for subdir with moduleHandle so that
+    // ByteSearch(moduleHandle, ...) and Get(moduleHandle) resolve correctly.
+    void AssociateModule(HMODULE moduleHandle, const char* subdir);
+
     // Returns the most recently loaded result for the module handle. Hook
     // installers ask this from ByteSearch when resolving a function name.
     // For a module that LoadFor never ran against, returns a sentinel result

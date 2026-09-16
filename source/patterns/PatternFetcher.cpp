@@ -562,12 +562,18 @@ namespace PatternFetcher {
         // consult this for the ok flag before calling MH_CreateHook.
         std::shared_mutex                              g_resultMutex;
         std::unordered_map<HMODULE, PatternResult>     g_lastResult;
+        std::unordered_map<std::string, PatternResult> g_lastSubdirResult;
         const PatternResult                             g_emptyResult{};
 
         void StoreResult(HMODULE module, const PatternResult& r) {
             if (!module) return;
             std::unique_lock lk(g_resultMutex);
             g_lastResult[module] = r;
+        }
+
+        void StoreSubdirResult(const std::string& subdir, const PatternResult& r) {
+            std::unique_lock lk(g_resultMutex);
+            g_lastSubdirResult[subdir] = r;
         }
 
     } // anonymous namespace
@@ -706,6 +712,16 @@ namespace PatternFetcher {
         g_entries.clear();
         std::unique_lock lk2(g_resultMutex);
         g_lastResult.clear();
+        g_lastSubdirResult.clear();
+    }
+
+    void AssociateModule(HMODULE moduleHandle, const char* subdir) {
+        if (!moduleHandle || !subdir) return;
+        std::unique_lock lk(g_resultMutex);
+        auto it = g_lastSubdirResult.find(subdir);
+        if (it != g_lastSubdirResult.end()) {
+            g_lastResult[moduleHandle] = it->second;
+        }
     }
 
     const PatternResult& Get(HMODULE moduleHandle) {
@@ -812,24 +828,15 @@ namespace PatternFetcher {
         }
     } // anonymous namespace
 
-    PatternResult LoadFor(HMODULE moduleHandle, const char* subdir) {
+    PatternResult LoadForPath(const std::wstring& diskPathW, const char* subdir, HMODULE moduleHandle) {
         PatternResult r{};
         r.source = "none";
         r.networkResult = "not-run";
-        if (!moduleHandle || !subdir) return r;
-
-        std::wstring diskPathW = ResolveModuleDiskPathW(moduleHandle);
-        if (diskPathW.empty()) {
-            LOG_MISC_DEBUG("PatternFetcher::LoadFor {}: GetModuleFileName failed", subdir);
-            r.error = "module-path-failed";
-            HookStatus::RecordPatternStatus(subdir, r.source, r.cacheHit,
-                                            r.networkResult, r.error);
-            return r;
-        }
+        if (diskPathW.empty() || !subdir) return r;
 
         r.sha = Sha256OfFile(diskPathW);
         if (r.sha.size() != 64) {
-            LOG_MISC_DEBUG("PatternFetcher::LoadFor {}: sha256 failed", subdir);
+            LOG_MISC_DEBUG("PatternFetcher::LoadForPath {}: sha256 failed", subdir);
             r.sha.clear();
             r.error = "sha256-failed";
             HookStatus::RecordPatternStatus(subdir, r.source, r.cacheHit,
@@ -851,7 +858,8 @@ namespace PatternFetcher {
                 r.cacheHit = true;
                 r.networkResult = "skipped-cache";
                 InstallEntries(subdir, std::move(cmap));
-                StoreResult(moduleHandle, r);
+                StoreSubdirResult(subdir, r);
+                if (moduleHandle) StoreResult(moduleHandle, r);
                 HookStatus::RecordPatternStatus(subdir, r.source, r.cacheHit,
                                                 r.networkResult, r.error);
                 LOG_MISC_DEBUG("PatternFetcher: {} cache hit sha={} entries={}",
@@ -873,9 +881,10 @@ namespace PatternFetcher {
             r.networkResult = "failed";
             if (!r.error.empty()) r.error += "; ";
             r.error += fetchErr;
-            LOG_MISC_DEBUG("PatternFetcher::LoadFor {}: {} (sha={})",
+            LOG_MISC_DEBUG("PatternFetcher::LoadForPath {}: {} (sha={})",
                            subdir, fetchErr, r.sha);
-            StoreResult(moduleHandle, r);  // ok=false, sha set
+            StoreSubdirResult(subdir, r);
+            if (moduleHandle) StoreResult(moduleHandle, r);  // ok=false, sha set
             HookStatus::RecordPatternStatus(subdir, r.source, r.cacheHit,
                                             r.networkResult, r.error);
             return r;
@@ -886,7 +895,7 @@ namespace PatternFetcher {
         // directory on demand.
         std::string werr = WriteCacheAtomic(r.sha, body);
         if (!werr.empty()) {
-            LOG_MISC_DEBUG("PatternFetcher::LoadFor {}: cache write failed ({})",
+            LOG_MISC_DEBUG("PatternFetcher::LoadForPath {}: cache write failed ({})",
                            subdir, werr);
             // Cache write is best-effort. A failed write does not invalidate
             // the parsed entries we already hold - the next session will
@@ -899,7 +908,8 @@ namespace PatternFetcher {
         r.networkResult = "hit";
         r.error.clear();
         InstallEntries(subdir, std::move(map));
-        StoreResult(moduleHandle, r);
+        StoreSubdirResult(subdir, r);
+        if (moduleHandle) StoreResult(moduleHandle, r);
         HookStatus::RecordPatternStatus(subdir, r.source, r.cacheHit,
                                         r.networkResult, r.error);
 
@@ -907,6 +917,12 @@ namespace PatternFetcher {
                        subdir, r.sha, SourceToStr(src),
                        static_cast<unsigned>(r.entries.size()));
         return r;
+    }
+
+    PatternResult LoadFor(HMODULE moduleHandle, const char* subdir) {
+        if (!moduleHandle || !subdir) return PatternResult{};
+        std::wstring diskPathW = ResolveModuleDiskPathW(moduleHandle);
+        return LoadForPath(diskPathW, subdir, moduleHandle);
     }
 
     PatternResult LoadForSteamUiDeferred() {

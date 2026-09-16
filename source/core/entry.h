@@ -44,10 +44,11 @@ inline std::atomic<bool> g_HooksInstalled{false};
 // Runtime paths filled in by LoadDiversion() from the process working directory.
 inline char SteamInstallPath[MAX_PATH] = {};  // Steam root: the folder containing steam.exe
 inline char SteamclientPath[MAX_PATH] = {};  // <SteamInstallPath>\steamclient64.dll
+inline char SteamuiPath[MAX_PATH]     = {};  // <SteamInstallPath>\steamui.dll
 inline char DiversionPath[MAX_PATH]   = {};  // <SteamInstallPath>\bin\lcoverlay.dll (hooked copy)
 inline char LuaDir[MAX_PATH]          = {};  // <SteamInstallPath>\config\stplug-in
 inline char ConfigPath[MAX_PATH]      = {};  // <SteamInstallPath>\lumacore.toml
-inline char PayloadPath[MAX_PATH]    = {};  // <SteamInstallPath>\LumaCorePayload.dll
+inline char PayloadPath[MAX_PATH]     = {};  // <SteamInstallPath>\LumaCorePayload.dll
 
 // Steam build number read at startup from steam.exe!GetBootstrapperVersion.
 // ByteSearch uses this string to select the best-matching Signature entry in PatternDb.h
@@ -57,6 +58,10 @@ inline std::string g_steamBuildId;
 
 // The fake AppId substituted when -onlinefix is active (Valve's SpaceWar lobby app).
 constexpr AppId_t kOnlineFixAppId = 480;
+
+namespace CoreInit::Patterns {
+    void TrySteamUiLateInstall(const char* reason);
+}
 
 // Dispatches the PatternFetcher worker for steamui.dll on a detached thread.
 // Defined in entry.cpp. Idempotent: subsequent calls after the first are no-ops.

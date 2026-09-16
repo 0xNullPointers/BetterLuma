@@ -84,6 +84,15 @@ namespace {
         { "AddProtobufAsBinary", "CJSMethodArgs::AddProtobufAsBinary" },
     };
 
+    static bool IsSteamClient64(const char* path) {
+        if (!path) return false;
+        const char* p1 = strrchr(path, '\\');
+        const char* p2 = strrchr(path, '/');
+        if (p2 && (!p1 || p2 > p1)) p1 = p2;
+        const char* fn = p1 ? p1 + 1 : path;
+        return (_stricmp(fn, "steamclient64.dll") == 0);
+    }
+
     // ▌ STEAMUI ▌ LoadModuleWithPath hook
     LM_HOOK(LoadModuleWithPath, HMODULE, const char* path, bool flags) {
         LOG_STEAMUICH_INFO("LoadModuleWithPath called with path: {} , flags: {} [tick={}]", path, flags, GetTickCount64());
@@ -100,7 +109,7 @@ namespace {
         auto lmwpElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - lmwpStart).count();
         LOG_STEAMUICH_INFO("LoadModuleWithPath({}) completed in {}ms", path, lmwpElapsed);
-        if (!strcmp(path, "steamclient64.dll")) {
+        if (IsSteamClient64(path)) {
             h = diversion_hModule;
             static int scCount = 0;
             HookStatus::SetSteamUiAttachState("attached", ++scCount, false);
@@ -287,6 +296,7 @@ namespace SteamUI {
             return;
         }
 
+        PatternFetcher::AssociateModule(hSteamUI, "steamui");
         const auto& patternState = PatternFetcher::Get(hSteamUI);
         if (!patternState.ok) {
             LOG_STEAMUICH_WARN("CoreHook: steamui patterns unavailable; waiting for retry");

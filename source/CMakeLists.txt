@@ -58,6 +58,7 @@ add_custom_command(
 
 add_library(LumaCore SHARED
     core/entry.cpp
+    core/LoaderGate.cpp
     core/Orchestrator.cpp
 
     runtime/Ticket.cpp
