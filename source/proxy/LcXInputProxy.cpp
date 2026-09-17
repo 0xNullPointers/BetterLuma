@@ -162,9 +162,12 @@ DWORD WINAPI XInputOrdinal108(DWORD a1, void* a2, void* a3, void* a4, void* a5)
 
 } // extern "C"
 
-// ─── LumaCore Injection ──────────────────────────────────────────────
+// ─── Payload Injection ──────────────────────────────────────────────
+// Static compatibility marker recognized by third-party tooling (e.g. CloudRedirect ThirdPartyDetector)
+extern "C" const char g_CompatMarker[] = "OpenSteamTool";
+
 // Only inject when the host process is steam.exe (case-insensitive).
-BOOL LumaCoreLoad()
+BOOL LoadPayload()
 {
     char exePath[MAX_PATH];
     if (!GetModuleFileNameA(NULL, exePath, MAX_PATH))
@@ -175,10 +178,10 @@ BOOL LumaCoreLoad()
     if (_stricmp(exeName, "steam.exe") != 0)
         return TRUE;   // not Steam - let the proxy load, but don't inject
 
-    if (GetModuleHandleA("LumaCore.dll"))
+    if (GetModuleHandleA("BetterLuma.dll"))
         return TRUE;   // already loaded by another proxy
 
-    return LoadLibraryA("LumaCore.dll") != NULL;
+    return LoadLibraryA("BetterLuma.dll") != NULL;
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
@@ -186,9 +189,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     switch (dwReason)
     {
     case DLL_PROCESS_ATTACH:
+        (void)g_CompatMarker;
         DisableThreadLibraryCalls(hModule);
         LoadRealXInput();
-        if (!LumaCoreLoad())
+        if (!LoadPayload())
             return FALSE;
         break;
     case DLL_THREAD_ATTACH:

@@ -113,11 +113,14 @@
 #pragma comment(linker, "/EXPORT:#186=DWMAPI.#186,@186,NONAME")
 #pragma comment(linker, "/EXPORT:#187=DWMAPI.#187,@187,NONAME")
 
+// Static compatibility marker recognized by third-party tooling (e.g. CloudRedirect ThirdPartyDetector)
+extern "C" const char g_CompatMarker[] = "OpenSteamTool";
+
 // Only inject when the host process is steam.exe (case-insensitive).
-// LoadLibraryA itself guarantees that LumaCore.dll's DllMain
+// LoadLibraryA itself guarantees that BetterLuma.dll's DllMain
 // runs at most once per process, so multiple hijack DLLs can safely
 // call this without additional synchronisation.
-BOOL LumaCoreLoad()
+BOOL LoadPayload()
 {
     char exePath[MAX_PATH];
     if (GetModuleFileNameA(NULL, exePath, MAX_PATH))
@@ -127,7 +130,9 @@ BOOL LumaCoreLoad()
         if (_stricmp(exeName, "steam.exe") != 0)
             return TRUE;   // not Steam - let the proxy load, but don't inject
     }
-    return LoadLibraryA("LumaCore.dll") != NULL;
+    if (GetModuleHandleA("BetterLuma.dll"))
+        return TRUE;
+    return LoadLibraryA("BetterLuma.dll") != NULL;
 }
 
 
@@ -137,8 +142,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     {
     case DLL_PROCESS_ATTACH:
         {
+            (void)g_CompatMarker;
             DisableThreadLibraryCalls(hModule);
-            if ( !LumaCoreLoad() )
+            if ( !LoadPayload() )
                 return FALSE;
             break;
         }

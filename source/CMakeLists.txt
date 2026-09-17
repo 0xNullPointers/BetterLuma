@@ -134,6 +134,7 @@ add_library(LumaCore SHARED
     $<$<CONFIG:Debug>:${PROTO_GEN_DIR}/steam_messages.pb.cc>
     $<$<CONFIG:Release>:${PROTO_GEN_LITE_DIR}/steam_messages.pb.cc>
 )
+set_target_properties(LumaCore PROPERTIES PREFIX "" OUTPUT_NAME "BetterLuma")
 
 set(BUILD_STAMP_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/BuildStamp.h")
 
@@ -202,6 +203,9 @@ add_library(dwmapi SHARED
     proxy/LcDwmProxy.cpp
 )
 set_target_properties(dwmapi PROPERTIES PREFIX "" OUTPUT_NAME "dwmapi")
+if(MSVC)
+    target_link_options(dwmapi PRIVATE "/PDBALTPATH:%_PDB%")
+endif()
 
 # ---------------------------------------------------------------------------
 # xinput1_4.dll hijack - secondary loader DLL placed alongside Steam.
@@ -211,6 +215,9 @@ add_library(xinput1_4 SHARED
     proxy/LcXInputProxy.def
 )
 set_target_properties(xinput1_4 PROPERTIES PREFIX "" OUTPUT_NAME "xinput1_4")
+if(MSVC)
+    target_link_options(xinput1_4 PRIVATE "/PDBALTPATH:%_PDB%")
+endif()
 
 
 

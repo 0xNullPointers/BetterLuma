@@ -6,14 +6,14 @@ This project is focused on continuing the development and adding key features an
 
 It ships as four files placed in the Steam installation directory:
 
-- `dwmapi.dll` - thin DWM proxy that Steam loads on startup; immediately loads `LumaCore.dll`
-- `xinput1_4.dll` - thin XInput 1.4 proxy; backup load gate for `LumaCore.dll`
-- `LumaCore.dll` - the main hook library and patch orchestration engine
+- `dwmapi.dll` - thin DWM proxy that Steam loads on startup; immediately loads `BetterLuma.dll`
+- `xinput1_4.dll` - thin XInput 1.4 proxy; backup load gate for `BetterLuma.dll`
+- `BetterLuma.dll` - the main hook library and patch orchestration engine
 - `LumaCorePayload.dll` - injected directly into game processes for OnlineFix multiplayer (EOS bridge and lobby redirection)
 
 ## How it works
 
-At Steam startup, the proxy DLLs load before any game code and load `LumaCore.dll`. The core engine then:
+At Steam startup, the proxy DLLs load before any game code and load `BetterLuma.dll`. The core engine then:
 
 1. Copies `steamclient64.dll` to `bin\lcoverlay.dll` so hooks and captures run in an isolated environment independently of the live client.
 2. Reads the current Steam build ID from `steam.exe!GetBootstrapperVersion` so byte-pattern searches pick the most accurate signature for the running build.
