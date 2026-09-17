@@ -14,7 +14,6 @@
 #include "PacketRouter.h"
 #include "PackagePatch.h"
 #include "LicenseHooks.h"
-#include "utils/Diagnostics.h"
 
 
 namespace LumaCore {
@@ -32,12 +31,6 @@ namespace LumaCore {
     }
 
     void Detach() {
-#ifdef LUMACORE_DIAGNOSTICS_ENABLED
-        // A16 auto-flush: write the achievement diagnostic ring to
-        // <AppData>\\BetterLuma\\diag.txt before tearing down
-        // the hooks. Steam restart wipes the ring otherwise.
-        Diagnostics::DumpForDetach();
-#endif
         DepotKeys::Uninstall();
         IPCBus::Uninstall();
         KVHooks::Uninstall();

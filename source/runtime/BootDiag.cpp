@@ -77,6 +77,10 @@ namespace BootDiag {
         }
 
         void PopupThread() {
+            if (g_capturedSha.empty() && SteamclientPath[0]) {
+                g_capturedSha = Sha256OfFile(SteamclientPath);
+            }
+
             char msg[4096];
             std::snprintf(msg, sizeof(msg),
                 "BetterLuma: IPC specs unavailable\n\n"
@@ -94,13 +98,17 @@ namespace BootDiag {
 
     } // anonymous namespace
 
-    void Capture() {
+    void Capture(std::string_view knownSha) {
         g_capturedBuildId = g_steamBuildId;
-        g_capturedSha     = Sha256OfFile(SteamclientPath);
+        if (!knownSha.empty()) {
+            g_capturedSha = std::string(knownSha);
+        } else {
+            g_capturedSha.clear();
+        }
 
         LOG_MISC_DEBUG("BootDiag: captured build={} sha={}",
                        g_capturedBuildId.empty() ? "unknown" : g_capturedBuildId,
-                       g_capturedSha.empty()     ? "unknown" : g_capturedSha);
+                       g_capturedSha.empty()     ? "deferred" : g_capturedSha);
     }
 
     void ReportMissing() {

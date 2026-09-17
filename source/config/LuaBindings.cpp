@@ -52,7 +52,8 @@ namespace LuaLoader::Internal {
         // workflow needs these regardless of config. Lowercased once on
         // declaration so the comparison loop is plain memcmp.
         constexpr std::string_view kHttpBaselineHosts[] = {
-            "manifesthub1.filegear-sg.me",
+            "manifest.opensteamtool.com",
+            "manifest.steam.run",
             "raw.githubusercontent.com",
             "cdn.jsdelivr.net",
             "gitflic.ru",

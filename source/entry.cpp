@@ -8,7 +8,6 @@
 #include "hooks/PackagePatch.h"
 #include "hooks/PatternFetcher.h"
 #include "utils/DirWatch.h"
-#include "utils/Diagnostics.h"
 #include "utils/HookStatus.h"
 
 #include <atomic>
@@ -243,7 +242,17 @@ static DWORD WINAPI InitThread(LPVOID param) {
     SteamUI::CoreHook();
 
     std::vector<std::string> watchDirs = Settings::luaPaths;
-    watchDirs.push_back(std::string(LuaDir));
+    std::filesystem::path defaultLuaPath = std::filesystem::path(LuaDir).lexically_normal().make_preferred();
+    bool hasDefault = false;
+    for (const auto& dir : watchDirs) {
+        if (std::filesystem::path(dir).lexically_normal().make_preferred() == defaultLuaPath) {
+            hasDefault = true;
+            break;
+        }
+    }
+    if (!hasDefault) {
+        watchDirs.push_back(defaultLuaPath.string());
+    }
     for (const auto& dir : watchDirs)
         LuaLoader::ParseDirectory(dir);
 
@@ -284,12 +293,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     }
     else if (dwReason == DLL_PROCESS_DETACH)
     {
-#ifdef LUMACORE_DIAGNOSTICS_ENABLED
-        // A16 belt-and-suspenders: flush the achievement diagnostic ring
-        // first thing on DLL detach so a crash inside CoreLoader::Detach
-        // never loses the captured events. Defensive write-and-return.
-        Diagnostics::DumpForDetach();
-#endif
         if (g_InitThread) {
             WaitForSingleObject(g_InitThread, 5000);
             CloseHandle(g_InitThread);

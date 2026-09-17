@@ -105,8 +105,15 @@ namespace Settings {
         logDir = (cfgPath.parent_path() / "betterluma").string();
         ResetConfigValues();
 
+        std::filesystem::path steamDir = cfgPath.parent_path();
+        if (steamDir.filename() == "betterluma") {
+            steamDir = steamDir.parent_path();
+        }
+        std::filesystem::path defaultPlugIn = (steamDir / "config" / "stplug-in").lexically_normal().make_preferred();
+
         if (!std::filesystem::exists(cfgPath)) {
             RememberStamp(cfgPath);
+            luaPaths.push_back(defaultPlugIn.string());
             LOG_INFO("Settings: config not found at '{}', using defaults", configPath);
             return;
         }
@@ -130,6 +137,18 @@ namespace Settings {
                             luaPaths.push_back(*s);
                     }
                 }
+            }
+
+            // Hardcoded fallback path: Steam/config/stplug-in must ALWAYS be present
+            bool foundDefault = false;
+            for (const auto& p : luaPaths) {
+                if (std::filesystem::path(p).lexically_normal().make_preferred() == defaultPlugIn) {
+                    foundDefault = true;
+                    break;
+                }
+            }
+            if (!foundDefault) {
+                luaPaths.push_back(defaultPlugIn.string());
             }
 
             // [pattern_fetch] and [remote] (OpenSteamTool compatibility)
@@ -264,9 +283,11 @@ namespace Settings {
 
         } catch (const toml::parse_error& e) {
             RememberStamp(cfgPath);
+            if (luaPaths.empty()) luaPaths.push_back(defaultPlugIn.string());
             LOG_WARN("Settings: TOML parse error: {}", e.what());
         } catch (...) {
             RememberStamp(cfgPath);
+            if (luaPaths.empty()) luaPaths.push_back(defaultPlugIn.string());
             LOG_WARN("Settings: load failed, using defaults");
         }
     }

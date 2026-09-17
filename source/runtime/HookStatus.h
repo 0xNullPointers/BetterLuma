@@ -5,32 +5,28 @@
 
 #pragma once
 
-// Tracks which hook installers landed and which couldn't resolve their target
-// through the runtime TOML. The result lands in <Steam>\betterluma\status.json
-// so external tools can surface a banner when the running Steam build doesn't have
-// a pattern emitted yet.
+// Tracks hook resolution status and pattern availability.
+// The result lands in <Steam>\betterluma\status.json so external tools
+// can inspect engine health and detect missing pattern sets.
 //
-// Threading: every public function takes the same internal mutex, so call
-// sites don't have to coordinate. Mutator calls made after init completes
-// (signalled by the first WriteToDisk) re-publish the file in place so the
-// banner reflects the latest counts.
+// Threading: every active function is protected by an internal mutex.
+// Disk writes are strictly explicit via WriteToDisk() at startup completion
+// or fatal error, ensuring ZERO I/O overhead on Steam's critical runtime paths.
 //
-// Schema produced by WriteToDisk (top-level keys only, exact set):
-//   build_id            string
-//   betterluma_build_stamp string (__DATE__ + __TIME__ from the DLL)
-//   build_config        string (Debug or Release)
-//   logging_enabled     boolean (false in shipped Release)
-//   diagnostics_enabled boolean (true in standard builds)
-//   protobuf_runtime    string (full or lite)
-//   startup_capture_revision string (purchase-race fix marker)
-//   toml_found          object with exactly steamclient and steamui booleans
-//   hooks_installed     non-negative integer (count of RecordInstalled calls)
-//   hooks_missed        array of strings (names from RecordMissed)
-//   steamclient_sha     string (empty when unknown)
-//   steamui_sha         string (empty when unknown)
-//   loader              string (proxy that loaded LumaCore)
-//   hook_target         string (diversion or active_steamclient)
-//   hook_module         string (path used for steamclient hook resolution)
+// Schema produced by WriteToDisk:
+//   version                string
+//   betterluma_version     string
+//   build_stamp            string
+//   betterluma_build_stamp string
+//   build_config           string (Debug or Release)
+//   steam_build_id         string
+//   build_id               string
+//   steamclient_sha        string (empty when unknown)
+//   steamui_sha            string (empty when unknown)
+//   toml_found             object with steamclient and steamui booleans
+//   hooks_installed        non-negative integer
+//   hooks_missed           array of strings
+//   status                 string ("ready", "degraded", "failed")
 
 #include <cstdint>
 #include <string>
@@ -39,83 +35,38 @@
 namespace HookStatus {
 
     void SetBuildId(std::string buildId);
-    void SetBinarySnapshot(std::string steamExePath,
-                           std::string steamclientPath,
-                           std::string steamuiPath,
-                           std::string diversionPath,
-                           std::string steamclientFileSha,
-                           std::string steamuiFileSha,
-                           std::string diversionFileSha);
-    void SetLoaderState(std::string loader, std::string hookTarget, std::string hookModule);
-    void SetPackageState(bool package0Captured, bool package0Seeded,
-                         bool startupInjectionDone, bool licenseRefreshDone);
-    void SetLuaCounts(std::uint64_t files, std::uint64_t depots,
-                      std::uint64_t libraryRoots, std::uint64_t statsRoots);
-    void RecordPackage0Seen(std::int32_t status, std::uint32_t appVecSize,
-                            std::uint32_t luaAddCount);
-    void RecordPackage0Capture(std::string source, bool luaReady);
-    void RecordStartupPackageRetry(std::string reason);
-    void RecordPackageContainment(std::int32_t status, std::uint32_t appVecSize,
-                                  std::uint64_t expected, std::uint64_t present,
-                                  std::uint64_t missing, std::uint64_t appended,
-                                  std::string reason);
-    void RecordHotReload(std::uint32_t additions, std::uint32_t removals,
-                         std::uint32_t uiTouches, std::uint32_t uiRemovals,
-                         std::string reason);
-    void RecordOwnershipCheck(std::uint32_t appId, bool patched,
-                              bool directOwned, bool familyShared,
-                              std::int32_t releaseState,
-                              std::uint32_t existInPackageNums,
-                              bool borrowedFlag, bool familySharedFlag);
-    void RecordSubscribedApps(std::uint32_t original, std::uint64_t roots,
-                              std::uint32_t written, std::uint32_t advertised,
-                              std::uint32_t buffer);
-    void RecordCloudDecision(std::uint32_t appId, bool tracked, bool managed,
-                             bool owned, bool familyShared, bool original,
-                             bool finalValue, std::string reason);
-    void RecordCloudCloseState(std::uint32_t appId, std::string result,
-                               bool ownerCaptured, bool sehDisabled);
-    void RecordCloudSyncGate(std::uint32_t appId, std::string stage,
-                             std::string result, std::string reason,
-                             bool attached);
-    void RecordPatternStatus(std::string moduleName, std::string source,
-                             bool cacheHit, std::string networkResult,
-                             std::string lastError);
-    void RecordSteamUiLateRetry(std::string result);
-    void RecordSteamStubDetection(std::uint32_t appId, std::string source,
-                                  std::string method, std::string image,
-                                  std::uint64_t candidates,
-                                  bool routeAccepted, std::string routeReason);
-    void RecordOnlineFixPayload(std::uint32_t appId, std::uint32_t pid,
-                                std::string image, std::string state,
-                                std::string detail);
-    void RecordStatsState(std::uint32_t appId, std::string protocol,
-                          std::uint64_t poolIndex, std::uint64_t poolCount,
-                          std::string matchSource, std::int32_t originalResult,
-                          std::string finalResult);
-    void SetStartupPhase(std::string phase);
-    void SetStartupRefreshState(std::string state);
-    void SetStartupSafety(std::string phase, bool safe, std::string deferredReason);
-    void SetMappedLoaders(std::string mappedLoaders);
-    void SetDiversionState(bool validated, std::string reason);
-    void SetDiversionDetails(bool fileReady, bool loadReady,
-                             std::string strategy, std::string lastError);
-    void SetSteamUiAttachState(std::string state, int attempts, bool activeFallbackUsed);
-
-    // Module names accepted: "steamclient" and "steamui". Anything else is
-    // ignored with a warning log line.
     void SetTomlAvailability(std::string_view moduleName, bool found);
-
     void SetShas(std::string steamclientSha, std::string steamuiSha);
-
-    void RecordInstalled();
+    void RecordInstalled() noexcept;
     void RecordMissed(std::string hookName);
-
-    // Writes the current snapshot to <Steam>\betterluma\status.json via a
-    // tmp + MoveFileExA(MOVEFILE_REPLACE_EXISTING) swap. Best-effort: failures
-    // log a warning and never throw. The first successful or attempted write
-    // marks init as complete, after which every mutator re-publishes.
     void WriteToDisk();
 
-}  // namespace HookStatus
+    // No-op compatibility stubs for legacy call sites (zero runtime cost)
+    inline void SetBinarySnapshot(std::string, std::string, std::string, std::string, std::string, std::string, std::string) noexcept {}
+    inline void SetLoaderState(std::string, std::string, std::string) noexcept {}
+    inline void SetPackageState(bool, bool, bool, bool) noexcept {}
+    inline void SetLuaCounts(std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t) noexcept {}
+    inline void RecordPackage0Seen(std::int32_t, std::uint32_t, std::uint32_t) noexcept {}
+    inline void RecordPackage0Capture(std::string, bool) noexcept {}
+    inline void RecordStartupPackageRetry(std::string) noexcept {}
+    inline void RecordPackageContainment(std::int32_t, std::uint32_t, std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t, std::string) noexcept {}
+    inline void RecordHotReload(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::string) noexcept {}
+    inline void RecordOwnershipCheck(std::uint32_t, bool, bool, bool, std::int32_t, std::uint32_t, bool, bool) noexcept {}
+    inline void RecordSubscribedApps(std::uint32_t, std::uint64_t, std::uint32_t, std::uint32_t, std::uint32_t) noexcept {}
+    inline void RecordCloudDecision(std::uint32_t, bool, bool, bool, bool, bool, bool, std::string) noexcept {}
+    inline void RecordCloudCloseState(std::uint32_t, std::string, bool, bool) noexcept {}
+    inline void RecordCloudSyncGate(std::uint32_t, std::string, std::string, std::string, bool) noexcept {}
+    inline void RecordPatternStatus(std::string, std::string, bool, std::string, std::string) noexcept {}
+    inline void RecordSteamUiLateRetry(std::string) noexcept {}
+    inline void RecordSteamStubDetection(std::uint32_t, std::string, std::string, std::string, std::uint64_t, bool, std::string) noexcept {}
+    inline void RecordOnlineFixPayload(std::uint32_t, std::uint32_t, std::string, std::string, std::string) noexcept {}
+    inline void RecordStatsState(std::uint32_t, std::string, std::uint64_t, std::uint64_t, std::string, std::int32_t, std::string) noexcept {}
+    inline void SetStartupPhase(std::string) noexcept {}
+    inline void SetStartupRefreshState(std::string) noexcept {}
+    inline void SetStartupSafety(std::string, bool, std::string) noexcept {}
+    inline void SetMappedLoaders(std::string) noexcept {}
+    inline void SetDiversionState(bool, std::string) noexcept {}
+    inline void SetDiversionDetails(bool, bool, std::string, std::string) noexcept {}
+    inline void SetSteamUiAttachState(std::string, int, bool) noexcept {}
 
+}  // namespace HookStatus

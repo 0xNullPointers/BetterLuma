@@ -15,7 +15,6 @@
 #include "hooks/client/PackagePatch.h"
 #include "hooks/client/LicenseHooks.h"
 #include "hooks/client/OnlineFixInject.h"
-#include "runtime/Diagnostics.h"
 #include "runtime/CloudRedirectHost.h"
 
 
@@ -47,9 +46,6 @@ namespace LumaCore {
     void Attach() { for (auto fn : kInstallOrder) fn(); }
 
     void Detach() {
-#ifdef LUMACORE_DIAGNOSTICS_ENABLED
-        Diagnostics::DumpForDetach();
-#endif
         for (auto fn : kUninstallOrder) fn();
         // Shutdown CloudRedirect host session
         CloudRedirectHost::Shutdown();

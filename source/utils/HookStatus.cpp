@@ -64,12 +64,25 @@ namespace HookStatus {
             return out;
         }
 
+        std::string ComputeStatusLocked() {
+            if (g_installed == 0 && (!g_steamclientToml || !g_steamuiToml)) {
+                return "failed";
+            }
+            if (!g_missed.empty() || !g_steamclientToml || !g_steamuiToml) {
+                return "degraded";
+            }
+            return "ready";
+        }
+
         // Caller already owns g_mu.
         std::string SerializeLocked() {
             std::string out;
             out.reserve(256 + g_missed.size() * 32);
             out += "{\n";
             out += "  \"build_id\": \"";
+            out += JsonEscape(g_buildId);
+            out += "\",\n";
+            out += "  \"steam_build_id\": \"";
             out += JsonEscape(g_buildId);
             out += "\",\n";
             out += "  \"toml_found\": {\n";
@@ -95,6 +108,9 @@ namespace HookStatus {
             out += "\",\n";
             out += "  \"steamui_sha\": \"";
             out += JsonEscape(g_steamuiSha);
+            out += "\",\n";
+            out += "  \"status\": \"";
+            out += JsonEscape(ComputeStatusLocked());
             out += "\"\n";
             out += "}\n";
             return out;

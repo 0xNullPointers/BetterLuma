@@ -66,7 +66,6 @@ add_library(LumaCore SHARED
     runtime/HookStatus.cpp
     runtime/BuildInfo.cpp
     runtime/DirWatch.cpp
-    runtime/Diagnostics.cpp
     runtime/VehUtil.cpp
     runtime/RuntimeHttp.cpp
     runtime/ManifestFetch.cpp
@@ -177,7 +176,6 @@ target_link_libraries(LumaCore PRIVATE
 
 target_compile_definitions(LumaCore PRIVATE
     $<$<CONFIG:Debug>:LUMACORE_LOGGING_ENABLED>
-    LUMACORE_DIAGNOSTICS_ENABLED
 )
 
 # ---------------------------------------------------------------------------
