@@ -35,7 +35,7 @@ endforeach()
 set(_new_content
 "// Auto-generated from ModuleLog.h -- DO NOT EDIT\n\
 #pragma once\n\n\
-#ifdef LUMACORE_LOGGING_ENABLED\n\n\
+#ifdef BETTERLUMA_LOGGING_ENABLED\n\n\
 ${_debug}\
 #else\n\n\
 ${_release}\

@@ -1,11 +1,11 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
 
 #include "LcPayloadLogging.h"
 
-#ifdef LUMACORE_PAYLOAD_LOGGING_ENABLED
+#ifdef BETTERLUMA_PAYLOAD_LOGGING_ENABLED
 
 #include <atomic>
 #include <ctime>

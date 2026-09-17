@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -55,7 +55,7 @@ namespace Settings {
 
     // [pattern_fetch] require_signed
     // When true, the pattern fetcher refuses every TOML body whose .sig
-    // sidecar fails RSA-PSS-SHA256 verification against the LumaCore-
+    // sidecar fails RSA-PSS-SHA256 verification against the betterluma-
     // embedded public key. The signature lives at <body_url>.sig - same
     // path with a ".sig" suffix appended. When false, we still verify and
     // log a warning on a missing/bad signature but installed entries from

@@ -15,7 +15,7 @@
 # default ${CMAKE_BINARY_DIR}/_deps and don't conflict across generators.
 #
 # Override the cache location at configure time:
-#   cmake -S src -B build -DLUMACORE_DEPS_DIR=/path/to/shared/cache
+#   cmake -S src -B build -DBETTERLUMA_DEPS_DIR=/path/to/shared/cache
 #
 # Idempotent.
 if(_LC_FETCH_CACHE_INITIALISED)
@@ -23,9 +23,9 @@ if(_LC_FETCH_CACHE_INITIALISED)
 endif()
 set(_LC_FETCH_CACHE_INITIALISED TRUE)
 
-if(NOT DEFINED LUMACORE_DEPS_DIR)
+if(NOT DEFINED BETTERLUMA_DEPS_DIR)
     # CMAKE_CURRENT_LIST_DIR is src/cmake; ../../.deps is the repo root.
-    get_filename_component(LUMACORE_DEPS_DIR
+    get_filename_component(BETTERLUMA_DEPS_DIR
         "${CMAKE_CURRENT_LIST_DIR}/../../.deps" ABSOLUTE)
 endif()
 
@@ -34,7 +34,7 @@ endif()
 set(_LC_ALL_CACHED TRUE)
 foreach(_dep IN ITEMS lua detours spdlog protobuf tomlplusplus)
     string(TOUPPER "${_dep}" _UPPER)
-    set(_src "${LUMACORE_DEPS_DIR}/${_dep}-src")
+    set(_src "${BETTERLUMA_DEPS_DIR}/${_dep}-src")
     if(IS_DIRECTORY "${_src}")
         set(FETCHCONTENT_SOURCE_DIR_${_UPPER} "${_src}" CACHE PATH
             "Pre-populated ${_dep} source dir" FORCE)
@@ -44,13 +44,13 @@ foreach(_dep IN ITEMS lua detours spdlog protobuf tomlplusplus)
 endforeach()
 
 if(_LC_ALL_CACHED)
-    message(STATUS "FetchContent: reusing cached sources at ${LUMACORE_DEPS_DIR}")
+    message(STATUS "FetchContent: reusing cached sources at ${BETTERLUMA_DEPS_DIR}")
 else()
     # At least one dep still needs to be downloaded. Direct the populate
     # output to the shared cache so the next configure can reuse it.
-    set(FETCHCONTENT_BASE_DIR "${LUMACORE_DEPS_DIR}" CACHE PATH
+    set(FETCHCONTENT_BASE_DIR "${BETTERLUMA_DEPS_DIR}" CACHE PATH
         "Shared FetchContent cache (sources + first-time builds)" FORCE)
-    message(STATUS "FetchContent: populating missing sources into ${LUMACORE_DEPS_DIR}")
+    message(STATUS "FetchContent: populating missing sources into ${BETTERLUMA_DEPS_DIR}")
 endif()
 
 # Skip the periodic git-fetch / tarball revalidation on configures after

@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -15,7 +15,7 @@
 
 // Runtime pattern fetcher. Hashes the on-disk Steam DLL backing a loaded module,
 // pulls a matching <sha>.toml from the user pattern repo (with jsDelivr CDN
-// secondary and a local cache under <Steam>\lumacore\pattern\), parses it, and
+// secondary and a local cache under <Steam>\betterluma\pattern\), parses it, and
 // exposes a name-keyed Lookup so ByteScan can resolve hook addresses against
 // the live binary instead of compiled-in byte arrays.
 namespace PatternFetcher {
@@ -68,7 +68,7 @@ namespace PatternFetcher {
     // thread. Caller wraps this in a detached worker so the Steam loader
     // thread never blocks on network IO. subdir must be "steamclient" or
     // "steamui" - picks the matching folder under the pattern repo for the
-    // network fetch. The local cache is flat at <Steam>\lumacore\pattern\
+    // network fetch. The local cache is flat at <Steam>\betterluma\pattern\
     // <sha>.toml since the SHA is unique per module on disk.
     PatternResult LoadFor(HMODULE moduleHandle, const char* subdir);
 
@@ -89,7 +89,7 @@ namespace PatternFetcher {
     const PatternResult& Get(HMODULE moduleHandle);
 
     // Cache-only sync load. Hashes the module, reads
-    // <Steam>\lumacore\pattern\<sha>.toml if present, installs the entries,
+    // <Steam>\betterluma\pattern\<sha>.toml if present, installs the entries,
     // and returns. No network IO. Used by InitThread to prime the runtime
     // map before hooks install so the LM_INSTALL macros can hit the runtime
     // path on the very first hook installer instead of racing the network
@@ -115,6 +115,6 @@ namespace PatternFetcher {
     // unavailable). Logs misses via LOG_WARN; callers don't need to.
     void* Resolve(HMODULE module, const char* funcName);
 
-    // Drops all in-memory entry maps. Called from LumaCore::Detach.
+    // Drops all in-memory entry maps. Called from BetterLuma::Detach.
     void Reset();
 }

@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -11,7 +11,7 @@
 #include <vector>
 
 // Abstraction over the registry-backed Steam credential store.
-// LumaCore keeps tickets and SteamIDs in HKCU\Software\Valve\Steam\Apps\<AppId>
+// betterluma keeps tickets and SteamIDs in HKCU\Software\Valve\Steam\Apps\<AppId>
 // which mirrors what Steam's own wrapper reads. The Status enum gives callers
 // a consistent error surface no matter which backing store we end up talking to.
 

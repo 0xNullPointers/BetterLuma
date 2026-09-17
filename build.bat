@@ -150,8 +150,6 @@ echo [STEP] Copying DLLs to %OUT_DIR%...
 if "%BUILD_RELEASE%"=="1" (
     if exist "%BUILD_DIR%\Release\BetterLuma.dll" (
         mkdir "%OUT_DIR%\Release" 2>nul
-        del /F /Q "%OUT_DIR%\Release\LumaCore.dll" 2>nul
-        del /F /Q "%OUT_DIR%\Release\LumaCorePayload.dll" 2>nul
         copy /Y "%BUILD_DIR%\Release\BetterLuma.dll" "%OUT_DIR%\Release\" >nul
         if exist "%BUILD_DIR%\Release\dwmapi.dll" (
             copy /Y "%BUILD_DIR%\Release\dwmapi.dll" "%OUT_DIR%\Release\" >nul
@@ -171,8 +169,6 @@ if "%BUILD_RELEASE%"=="1" (
 if "%BUILD_DEBUG%"=="1" (
     if exist "%BUILD_DIR%\Debug\BetterLuma.dll" (
         mkdir "%OUT_DIR%\Debug" 2>nul
-        del /F /Q "%OUT_DIR%\Debug\LumaCore.dll" 2>nul
-        del /F /Q "%OUT_DIR%\Debug\LumaCorePayload.dll" 2>nul
         copy /Y "%BUILD_DIR%\Debug\BetterLuma.dll" "%OUT_DIR%\Debug\" >nul
         if exist "%BUILD_DIR%\Debug\dwmapi.dll" (
             copy /Y "%BUILD_DIR%\Debug\dwmapi.dll" "%OUT_DIR%\Debug\" >nul

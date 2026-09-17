@@ -1,11 +1,11 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
 
 #pragma once
 
-// Hook plumbing macros for LumaCore. Every address resolution flows through
+// Hook plumbing macros for betterluma. Every address resolution flows through
 // ByteSearch, which reads the per-build TOML published to the pattern repo.
 // When the running Steam build has no TOML, hooks fail clean: ByteSearch
 // returns nullptr, the macro logs a miss into status.json via

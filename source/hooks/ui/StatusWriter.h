@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -6,7 +6,7 @@
 #pragma once
 
 // Status writer. Every hook installer reports a hit or miss as
-// it runs; once init is done the data gets flushed to <Steam>\lumacore\status.json
+// it runs; once init is done the data gets flushed to <Steam>\betterluma\status.json
 // so the GUI can poll the file and surface a banner when the running Steam
 // build's TOML hasn't been uploaded yet.
 //
@@ -45,7 +45,7 @@ namespace StatusWriter {
     void RecordHit(const char* funcName);
     void RecordMiss(const char* funcName);
 
-    // Writes the accumulated status to <Steam>\lumacore\status.json. Safe to
+    // Writes the accumulated status to <Steam>\betterluma\status.json. Safe to
     // call multiple times - the writer rebuilds the JSON each call from the
     // current in-memory state, so the latest hit/miss counts always logs.
     // Called from entry.cpp at end of init and again on detach.

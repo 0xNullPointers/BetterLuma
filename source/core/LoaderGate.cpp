@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
 
@@ -28,7 +28,7 @@ namespace LoaderGate {
         return p1 ? p1 + 1 : path;
     }
 
-#ifdef LUMACORE_LOGGING_ENABLED
+#ifdef BETTERLUMA_LOGGING_ENABLED
 #define LOG_GATE_INFO(...) do { if (Logger::CoreInCh) { LOG_COREIN_INFO(__VA_ARGS__); } } while (0)
 #else
 #define LOG_GATE_INFO(...) ((void)0)
@@ -53,7 +53,7 @@ namespace LoaderGate {
         }
 
         // Host process (steam.exe) is loading steamui or steamclient.
-        // Block until LumaCore background bootstrap has finished all pattern
+        // Block until betterluma background bootstrap has finished all pattern
         // downloads and installed critical hooks.
         if (!g_isReady.load(std::memory_order_acquire) && g_hBootstrapReadyEvent) {
             LOG_GATE_INFO("\"stage\" \"LoaderGate\" \"act\" \"hold\" \"module\" \"{}\" \"tid\" {}",

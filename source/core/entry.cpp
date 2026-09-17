@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -132,7 +132,7 @@ namespace CoreInit {
         // Prepares the runtime paths and loads the hooked copy of steamclient64.dll.
         //
         // The diversion pattern: instead of hooking the real steamclient64.dll directly,
-        // LumaCore copies it to bin\lcoverlay.dll and loads that copy. The SteamUI hook then
+        // BetterLuma copies it to bin\lcoverlay.dll and loads that copy. The SteamUI hook then
         // intercepts steamui.dll's LoadModuleWithPath("steamclient64.dll") call and returns
         // diversion_hModule, so Steam's UI layer ends up using the hooked copy transparently.
         //
@@ -357,7 +357,7 @@ namespace CoreInit {
             // ── Denuvo authorization state machine ──────────────────
             DenuvoAuth::Init();
 
-            LumaCore::Attach();
+            BetterLuma::Attach();
             // Initialize CloudRedirect host (loads DLL if enabled in settings)
             CloudRedirectHost::Initialize(SteamInstallPath);
             g_HooksInstalled.store(true);
@@ -381,7 +381,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     if (dwReason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(hModule);
-        // Pin the module so a stray FreeLibrary cannot unmap LumaCore while
+        // Pin the module so a stray FreeLibrary cannot unmap BetterLuma while
         // hooks and worker threads are still live. Failure is non-fatal; we
         // just lose the unmap protection and continue attach.
         HMODULE selfPin = nullptr;
@@ -416,7 +416,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
             CloudRedirectHost::Shutdown();
             if (pvReserved == nullptr) {
                 SteamUI::CoreUnhook();
-                LumaCore::Detach();
+                BetterLuma::Detach();
             }
         }
     }

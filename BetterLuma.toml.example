@@ -1,4 +1,4 @@
-# BetterLuma.toml - BetterLumaCore configuration
+# BetterLuma.toml - BetterLuma configuration
 # Place this file in your Steam installation directory (next to steam.exe).
 # Rename to BetterLuma.toml to activate. All sections are optional - missing
 # keys fall back to the defaults shown below.

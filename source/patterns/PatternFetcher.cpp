@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -845,7 +845,7 @@ namespace PatternFetcher {
         }
 
         // ── Cache-first per requirement 2.4 ────────────────────────────────
-        // If <Steam>\lumacore\pattern\<sha>.toml exists at startup and parses,
+        // If <Steam>\betterluma\pattern\<sha>.toml exists at startup and parses,
         // skip the network entirely. ReadCache already treats an open failure
         // on a present file as a parse miss so requirement 2.5 can fall
         // through to the network path below.

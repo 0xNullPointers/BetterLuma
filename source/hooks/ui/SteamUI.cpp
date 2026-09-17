@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -179,7 +179,7 @@ namespace {
 
     //  STEAMUI  FillInAppOverview: unchanged apart from removal of the
     // corrupting int64 write (offset 0x08 is StateFlags, not PurchasedTime,
-    // in LumaCore's CSteamApp layout). g_pAppChangeSource capture moved to
+    // in betterluma's CSteamApp layout). g_pAppChangeSource capture moved to
     // the MarkAppChange hook above.
     LM_HOOK(FillInAppOverview, void*, void* pThis, void* pAppOverview, void* pApp)
     {

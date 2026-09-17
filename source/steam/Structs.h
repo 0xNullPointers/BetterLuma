@@ -1,16 +1,16 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
 
 #pragma once
 
-// LumaCore in-process layout descriptors.
+// betterluma in-process layout descriptors.
 //
-// Each struct in this header pins the byte layout LumaCore needs in order
+// Each struct in this header pins the byte layout betterluma needs in order
 // to read or rewrite live Steam client memory from a hook. The shapes are
 // pinned by static_assert further down so a Steam update that shuffles a
-// field will fail the LumaCore build instead of corrupting state at run
+// field will fail the betterluma build instead of corrupting state at run
 // time.
 
 #include "Types.h"
@@ -33,7 +33,7 @@ struct CUtlVector {
 
 	// Drop-by-swap removal: copy the tail element over the slot at `elem`
 	// and shrink. Cheap, but the surviving element order is no longer the
-	// insertion order. LumaCore call sites that walk the vector once are
+	// insertion order. betterluma call sites that walk the vector once are
 	// fine with that; anything that needs stable order should not use it.
 	void FastRemove(uint32 elem) {
 		if (elem < m_Size) {
@@ -65,14 +65,14 @@ struct CUtlBuffer{
 	UtlBufferOverflowFunc_t m_GetOverflowFunc;
 	UtlBufferOverflowFunc_t m_PutOverflowFunc;
 
-	// Direct base + cursor accessors. LumaCore needs these so a hook
+	// Direct base + cursor accessors. betterluma needs these so a hook
 	// can splice into the underlying buffer without duplicating every
 	// member access at the call site.
 	uint8* Base()             { return m_Memory.m_pMemory; }
 	const uint8* Base() const { return m_Memory.m_pMemory; }
 	int32 TellPut() const     { return m_Put; }
 	int32 TellGet() const     { return m_Get; }
-	// Diagnostics dump, used by LumaCore logs to make a sliced buffer
+	// Diagnostics dump, used by betterluma logs to make a sliced buffer
 	// readable in a single line.
 	std::string DebugString() const{
       return std::format("m_Memory:0x{:X} m_AllocCnt:{} m_Grow:{} m_Get:{} m_Put:{} m_nOffset:{} m_flags:{}",
@@ -139,7 +139,7 @@ struct CSteamApp{
 #pragma pack(pop)
 
 // One depot record (32 bytes) emitted by the depot dependency builder.
-// LumaCore reads these out of the resolved dependency vector and feeds
+// betterluma reads these out of the resolved dependency vector and feeds
 // the LcsRequired flag plus the manifest GID into its registration path.
 struct DepotEntry
 {
@@ -172,7 +172,7 @@ struct KeyValues
 
 	KeyValues*          m_pChain;           // +0x08 (8B), chained KeyValues used as a fallback during lookup
 
-	// +0x10 (4B), packed bitfield. Layout LumaCore depends on:
+	// +0x10 (4B), packed bitfield. Layout betterluma depends on:
 	//   bit[0:24]  m_iKeyName              (25 bits) symbol assigned by the KeyValues string pool
 	//   bit[25:28] m_iDataType             (4 bits)  value-type discriminant, see EKeyValuesType
 	//   bit[29]    m_bHasEscapeSequences             escape sequences were enabled at parse time
@@ -199,8 +199,8 @@ struct KeyValues
 static_assert(sizeof(KeyValues) == 0x20, "BetterLuma KeyValues node size drift: KeyValues no longer matches the 0x20-byte layout BetterLuma expects");
 
 // IKeyValuesSystem
-//   LumaCore resolves this interface through the export
-//   "KeyValuesSystemSteam" (ord 103) from vstdlib_s64.dll. LumaCore
+//   betterluma resolves this interface through the export
+//   "KeyValuesSystemSteam" (ord 103) from vstdlib_s64.dll. betterluma
 //   consumes the first three vtable slots only, so the rest are
 //   sketched in comments rather than declared.
 struct IKeyValuesSystem {
@@ -219,9 +219,9 @@ struct IKeyValuesSystem {
 	virtual const char* GetStringForSymbol(int symbol) = 0;
 
 	// vtable[3..11] cover allocation, leak tracking, and file caching.
-	// LumaCore does not call these, so the slots stay undeclared.
+	// betterluma does not call these, so the slots stay undeclared.
 
-	// Convenience helpers used by LumaCore call sites.
+	// Convenience helpers used by betterluma call sites.
 	int  GetSymbol(const char* name)        { return GetSymbolForString(name, false); }
 	int  GetOrCreateSymbol(const char* name) { return GetSymbolForString(name, true); }
 	const char* GetKeyName(int symbol)       { return GetStringForSymbol(symbol); }
@@ -244,7 +244,7 @@ struct MsgHdr
 	uint32 headerLength;
 };
 
-// LumaCore branches on the high bit of eMsg to pick between the protobuf
+// betterluma branches on the high bit of eMsg to pick between the protobuf
 // header path and the extended-header path.
 constexpr uint32 kMsgHdrProtoFlag = 0x80000000;
 
@@ -262,7 +262,7 @@ struct ExtendedMsgHdr
 };
 #pragma pack(pop)
 
-// CSteamPipeClient: layout LumaCore reads back from the live pipe object.
+// CSteamPipeClient: layout betterluma reads back from the live pipe object.
 struct CSteamPipeClient {
     void*    m_pServer;         // +0
     void*    m_pClient;         // +8

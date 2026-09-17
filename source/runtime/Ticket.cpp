@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -658,7 +658,7 @@ namespace Ticket {
     //
     //  This is a hand-curated, deliberately-small list. We only flag
     //  titles where we have direct evidence of error-54 reports against
-    //  LumaCore. The list is not security-sensitive - it only changes
+    //  betterluma. The list is not security-sensitive - it only changes
     //  the wording of the diagnostic log line so users get a "try
     //  Steamless" hint instead of generic "ownership patched" output.
     // ════════════════════════════════════════════════════════════════

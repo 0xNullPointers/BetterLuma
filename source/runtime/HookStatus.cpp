@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -34,7 +34,7 @@ namespace HookStatus {
         std::uint64_t            g_installed = 0;
         std::vector<std::string> g_missed;
 
-#ifdef LUMACORE_LOGGING_ENABLED
+#ifdef BETTERLUMA_LOGGING_ENABLED
         constexpr const char* kBuildConfig = "Debug";
 #else
         constexpr const char* kBuildConfig = "Release";

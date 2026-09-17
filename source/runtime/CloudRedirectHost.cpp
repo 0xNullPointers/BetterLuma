@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
 
@@ -433,7 +433,7 @@ namespace {
     }
 
     // Retargets hardcoded "steamclient64.dll" module references inside cloud_redirect.dll
-    // to LumaCore's diversion module "lcoverlay.dll". This allows CloudRedirect's built-in
+    // to BetterLuma's diversion module "lcoverlay.dll". This allows CloudRedirect's built-in
     // RTTI scanner and prologue validator to discover CClientUnifiedServiceTransport on
     // lcoverlay.dll and install in-memory vtable hooks directly (0ms latency, full offline support).
     // If scanning finds no matches (e.g. future CloudRedirect changes), it logs a diagnostic

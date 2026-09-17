@@ -1,9 +1,9 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
 
-// Registry of per-module log channels for LumaCore.
+// Registry of per-module log channels for betterluma.
 //
 // Each LC_MOD(VarName, "filename") line registers one module logger.
 // The file is included twice with different definitions of LC_MOD:
@@ -15,7 +15,7 @@
 // To add a new module: add one LC_MOD line here, then re-run CMake so the
 // macro header gets regenerated. No other files need to change.
 //
-// Channel identifiers carry a `Ch` suffix so they stay LumaCore-specific and
+// Channel identifiers carry a `Ch` suffix so they stay betterluma-specific and
 // cannot collide with shared channel tokens like `IPC`, `NetPacket`, `Package`.
 
 LC_MOD(IpcCh,           "ipc")

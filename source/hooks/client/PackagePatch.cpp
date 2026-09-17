@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -136,7 +136,7 @@ namespace {
     // Steam dispatches user-stats callbacks (UserStatsReceived, UserStatsStored,
     // UserAchievementStored, UserAchievementIconFetched) keyed on the real
     // appid. Hidden-480 route games register their callback handlers under
-    // appid 480 because LumaCore rewrites the spawn CGameID to 480, so the
+    // appid 480 because betterluma rewrites the spawn CGameID to 480, so the
     // game never sees those callbacks until we rewrite m_nGameID back to 480.
     //
     // The rewrite path is gated five ways:

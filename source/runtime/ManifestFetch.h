@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -11,7 +11,7 @@
 // CONNECTION" even though the network is fine, which is what tripped
 // up the Batman: Arkham Knight (208650) launch.
 //
-// The fix: when LumaCore sees an outgoing 151 with target_job_name
+// The fix: when betterluma sees an outgoing 151 with target_job_name
 // "ContentServerDirectory.GetManifestRequestCode#1" for a depot we
 // have a manifest override on, we kick off an async HTTP GET against
 // the configured manifest_fetch.url. The matching 147 response is
@@ -23,8 +23,8 @@
 // All thread-safe; futures are keyed on jobid_source so multiple
 // in-flight gid lookups stay independent.
 
-#ifndef LUMACORE_MANIFEST_FETCH_H
-#define LUMACORE_MANIFEST_FETCH_H
+#ifndef BETTERLUMA_MANIFEST_FETCH_H
+#define BETTERLUMA_MANIFEST_FETCH_H
 
 #include <cstdint>
 #include <future>

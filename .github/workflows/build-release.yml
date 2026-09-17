@@ -5,13 +5,9 @@ on:
     tags:
       - 'v*'
     branches:
-      - master
       - main
-      - changes-A
-      - bug-fixesA
   pull_request:
     branches:
-      - master
       - main
   workflow_dispatch:
     inputs:
@@ -70,19 +66,19 @@ jobs:
         shell: pwsh
         run: |
           # Verify compiled binaries exist
-          if (-not (Test-Path "Releases/Release/LumaCore.dll")) {
-              throw "Releases/Release/LumaCore.dll was not generated!"
+          if (-not (Test-Path "Releases/Release/BetterLuma.dll")) {
+              throw "Releases/Release/BetterLuma.dll was not generated!"
           }
-          if (-not (Test-Path "Releases/Debug/LumaCore.dll")) {
-              throw "Releases/Debug/LumaCore.dll was not generated!"
+          if (-not (Test-Path "Releases/Debug/BetterLuma.dll")) {
+              throw "Releases/Debug/BetterLuma.dll was not generated!"
           }
 
           # Package Release DLLs
-          tar -a -c -f "Releases/Release.zip" -C "Releases/Release" LumaCore.dll dwmapi.dll xinput1_4.dll LumaCorePayload.dll
+          tar -a -c -f "Releases/Release.zip" -C "Releases/Release" BetterLuma.dll dwmapi.dll xinput1_4.dll BetterLumaPayload.dll
           Write-Host "Created Releases/Release.zip"
 
           # Package Debug DLLs
-          tar -a -c -f "Releases/Debug.zip" -C "Releases/Debug" LumaCore.dll dwmapi.dll xinput1_4.dll LumaCorePayload.dll
+          tar -a -c -f "Releases/Debug.zip" -C "Releases/Debug" BetterLuma.dll dwmapi.dll xinput1_4.dll BetterLumaPayload.dll
           Write-Host "Created Releases/Debug.zip"
 
           # Compute SHA-256 Checksums (Industry standard for binary release verification)

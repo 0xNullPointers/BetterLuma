@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -79,7 +79,7 @@ namespace {
         policy.familyShared = LuaLoader::IsFamilySharedApp(appId);
 
         if (Settings::cloudEnabled) {
-            // CloudRedirect manages cloud saves; LumaCore does not block
+            // CloudRedirect manages cloud saves; betterluma does not block
             policy.block = false;
         } else if (!Settings::cloudSuppressed) {
             // Suppression explicitly disabled; pass through to native Steam

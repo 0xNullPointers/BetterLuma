@@ -1,16 +1,16 @@
-# BetterLumaCore - Feature Reference
-<!-- BetterLumaCore technical architecture and subsystem reference. -->
+# BetterLuma - Feature Reference
+<!-- BetterLuma technical architecture and subsystem reference. -->
 
-This document describes every subsystem in BetterLumaCore, its purpose, the Steam internals it touches, and the configuration interface exposed via Lua scripts and `BetterLuma.toml`.
+This document describes every subsystem in BetterLuma, its purpose, the Steam internals it touches, and the configuration interface exposed via Lua scripts and `BetterLuma.toml`.
 
-Original work by Midrags. Copyright of all original files is held by Midrags.
-Modifications, architectural enhancements, and continued development by 0xBadCod3.
+Original work by Midrags (LumaCore). Copyright of all original files is held by Midrags.
+Modifications, architectural enhancements, and continued development by 0xBadCod3 (BetterLuma).
 
 ---
 
 ## Injection chain
 
-Steam loads DLLs from its own directory on startup. BetterLumaCore exploits this by placing thin proxy DLLs alongside `steam.exe`:
+Steam loads DLLs from its own directory on startup. BetterLuma exploits this by placing thin proxy DLLs alongside `steam.exe`:
 
 - `dwmapi.dll` - forwards the full DWM API surface and loads `BetterLuma.dll` on attach
 - `xinput1_4.dll` - forwards XInput 1.4 exports; acts as a backup load gate, calling `LoadLibraryA("BetterLuma.dll")` on process attach as well
@@ -33,7 +33,7 @@ For OnlineFix games, `BetterLumaPayload.dll` is injected directly into game proc
 
 ## Pattern resolution (`hooks/PatternFetcher.cpp` + `utils/ByteScan.cpp`)
 
-BetterLumaCore locates Steam internal functions through a runtime pattern map. At startup the fetcher hashes `steamclient64.dll` and `steamui.dll` (lowercase hex SHA-256), looks up a matching `<sha>.toml` for each, and stores the parsed entries in an in-memory map keyed by function name. Each entry is a `name`, an `rva` relative to that DLL's image base, and a byte `sig` (hex with `??` wildcards) used to verify the bytes at that rva before any hook attaches.
+BetterLuma locates Steam internal functions through a runtime pattern map. At startup the fetcher hashes `steamclient64.dll` and `steamui.dll` (lowercase hex SHA-256), looks up a matching `<sha>.toml` for each, and stores the parsed entries in an in-memory map keyed by function name. Each entry is a `name`, an `rva` relative to that DLL's image base, and a byte `sig` (hex with `??` wildcards) used to verify the bytes at that rva before any hook attaches.
 
 ### Pattern file format
 
@@ -52,7 +52,7 @@ The schema matches the runtime pattern map format - TOML files dropped into `<St
 
 For each DLL, the fetcher tries sources in this order:
 
-1. **User mirror** (optional). Configured under `[pattern_fetch] url_template` or `mirror` in `BetterLuma.toml`. BetterLumaCore supports full template placeholder substitution: `{channel}`, `{component}`, `{subdir}` (`steamclient`, `steamui`, or `steamclientipc`), `{sha256}`, and `{sha}`. Any failure (HTTP 4xx/5xx, network error, parse error) logs a debug line and falls through.
+1. **User mirror** (optional). Configured under `[pattern_fetch] url_template` or `mirror` in `BetterLuma.toml`. BetterLuma supports full template placeholder substitution: `{channel}`, `{component}`, `{subdir}` (`steamclient`, `steamui`, or `steamclientipc`), `{sha256}`, and `{sha}`. Any failure (HTTP 4xx/5xx, network error, parse error) logs a debug line and falls through.
 2. **GitHub raw** - `raw.githubusercontent.com/KoriaPolis/Steam-Auto-PT/pattern/<subdir>/<sha>.toml`.
 3. **jsDelivr CDN** - `cdn.jsdelivr.net/gh/KoriaPolis/Steam-Auto-PT@pattern/<subdir>/<sha>.toml`. Used only on transport failure since GitHub raw and jsDelivr serve the same content; a 404 from either short-circuits to the cache step.
 4. **Local cache** - `<Steam>\betterluma\pattern\<sha>.toml`. Always written-through on a successful fetch and always read on a network miss.
@@ -65,13 +65,13 @@ Cache writes go through `<sha>.toml.tmp` followed by `MoveFileExA(MOVEFILE_REPLA
 
 The hook installer macros call `ByteSearch(module, "FunctionName")`, which consults the in-memory pattern map, verifies the bytes at `module_base + entry.rva` match the TOML's sig, and returns the address. Out-of-range rva values, sig mismatches, or missing names log a warning and `RecordMissed` into `status.json`; the hook is silently skipped and Steam runs that function unmodified. A missing TOML for one DLL never blocks hook installs in the other DLL, so a partial pattern set still produces a partially-functional install instead of aborting.
 
-In addition to runtime pattern maps, BetterLumaCore supports multi-tier fallbacks including string cross-reference anchoring (`StringFind`) and position-independent executable section scanning.
+In addition to runtime pattern maps, BetterLuma supports multi-tier fallbacks including string cross-reference anchoring (`StringFind`) and position-independent executable section scanning.
 
 There are no compiled-in `*Sigs[]` arrays anymore. The runtime pattern map is the single source of truth; the legacy `hooks/PatternDb.h` header is gone.
 
 ### Pattern refresh
 
-If Steam updates and BetterLumaCore stops resolving hooks for the new client, downgrade Steam if possible and report the Steam update to the maintainer with the collected logs.
+If Steam updates and BetterLuma stops resolving hooks for the new client, downgrade Steam if possible and report the Steam update to the maintainer with the collected logs.
 
 The runtime fetcher's own logs (`<Steam>\betterluma\misc.log`) note every overlay, cache, and network step so failed pattern resolution can be triaged from user logs.
 
@@ -97,7 +97,7 @@ addappid(1234567, 1, "0A1B2C3D...")  -- depot 1234567, decryption key
 
 Hooks `IPCProcessMessage` and resolves `GetPipeClient` - both via pure byte-pattern matching.
 
-Steam uses an internal IPC bus to route messages between its client service and the UI process. The hook intercepts `IPCProcessMessage`, inspects the command code, and dispatches it to any registered BetterLumaCore handlers. Currently the following handlers are active:
+Steam uses an internal IPC bus to route messages between its client service and the UI process. The hook intercepts `IPCProcessMessage`, inspects the command code, and dispatches it to any registered BetterLuma handlers. Currently the following handlers are active:
 
 - `GetSteamID` - returns a spoofed SteamID (see CmdUser below)
 - `GetAppOwnershipTicketExtendedData` - returns a validated ownership ticket for apps in the Lua config
@@ -106,8 +106,8 @@ All other messages pass through unmodified.
 
 Both `GetPipeClient` and `IPCProcessMessage` resolve through the same runtime pattern map every other hook uses; the address is verified against the TOML's sig at `module_base + rva` before any detour attaches. Pattern-only resolution sidesteps string cross-reference helper hazards at early startup.
 
-**Pipe Client PID Resolution (BetterLumaCore Enhancement)**:
-When multiple OnlineFix games run concurrently, remote storage and cloud save calls must resolve to the specific game process rather than a single global AppID. BetterLumaCore queries `GetPipeClient(pipe)` to obtain the connecting client's Process ID (PID) and maps it to the corresponding game's real AppID. This ensures completely isolated save directories and storage paths for each concurrently running game.
+**Pipe Client PID Resolution (BetterLuma Enhancement)**:
+In original LumaCore, remote storage and cloud save calls were tied to a single global AppID mapping, causing conflicts when multiple games were running. BetterLuma queries `GetPipeClient(pipe)` to obtain the connecting client's Process ID (PID) and maps it to the corresponding game's real AppID. This ensures completely isolated save directories and storage paths for each concurrently running game.
 
 **Scoped Stats Overrides**:
 Uses thread-safe depth tracking (`StatsGuard`) to ensure `IClientUserStats` and RemoteStorage calls receive the target game's real AppID while lobby, presence, and P2P networking retain Spacewar (480) identity.
@@ -118,12 +118,12 @@ Uses thread-safe depth tracking (`StatsGuard`) to ensure `IClientUserStats` and 
 
 Handles the `GetSteamID` and `GetAppOwnershipTicketExtendedData` IPC commands.
 
-**GetSteamID**: returns the SteamID configured in `BetterLuma.toml` under `[user] steam_id`. For Denuvo-protected titles, which embed the owning SteamID in the AppTicket and validate it at runtime, BetterLumaCore uses `GetDynamicOwnerSteamID`. That function searches `Steam\userdata\` directories for an account that has local app data for the requested game and returns that account's ID. This avoids hardcoding a single SteamID for users who run multiple accounts.
+**GetSteamID**: returns the SteamID configured in `BetterLuma.toml` under `[user] steam_id`. For Denuvo-protected titles, which embed the owning SteamID in the AppTicket and validate it at runtime, BetterLuma uses `GetDynamicOwnerSteamID`. That function searches `Steam\userdata\` directories for an account that has local app data for the requested game and returns that account's ID. This avoids hardcoding a single SteamID for users who run multiple accounts.
 
-**GetAppOwnershipTicketExtendedData**: serves a cached or forged AppTicket for apps listed in the active `.lua` config. BetterLumaCore rejects stale tickets when the embedded app ID does not match the requested app. Steam Stub auto routes prefer an app-7 forged target ticket and log non-app-7 target tickets as fallback-only so they cannot look like the working path. `CmdUser` is the single owner for `IClientUser` ticket replies and writes Steam's fixed reply shape: reply tag, signed ticket total-size return value, fixed `pTicket(cbMaxTicket)` slot, `piAppId`, `piSteamId`, `piSignature`, and `pcbSignature`.
+**GetAppOwnershipTicketExtendedData**: serves a cached or forged AppTicket for apps listed in the active `.lua` config. BetterLuma rejects stale tickets when the embedded app ID does not match the requested app. Steam Stub auto routes prefer an app-7 forged target ticket and log non-app-7 target tickets as fallback-only so they cannot look like the working path. `CmdUser` is the single owner for `IClientUser` ticket replies and writes Steam's fixed reply shape: reply tag, signed ticket total-size return value, fixed `pTicket(cbMaxTicket)` slot, `piAppId`, `piSteamId`, `piSignature`, and `pcbSignature`.
 
-**Multi-Game Achievement Callback Dual-Dispatch (BetterLumaCore Enhancement)**:
-When running multiple OnlineFix titles, Steam's achievement and stats callbacks (`UserStatsReceived_t`, `UserAchievementStored_t`) must be dispatched to the correct game. `CmdUser` and `PackagePatch` check `SteamCapture::IsOnlineFixApp(current)` to dynamically rewrite and dual-dispatch callbacks so achievements unlock reliably across all active games.
+**Multi-Game Achievement Callback Dual-Dispatch (BetterLuma Enhancement)**:
+When running multiple OnlineFix titles, Steam's achievement and stats callbacks (`UserStatsReceived_t`, `UserAchievementStored_t`) must be dispatched to the correct game. While original LumaCore only dispatched callbacks for a single foreground title, BetterLuma's `CmdUser` and `PackagePatch` check `SteamCapture::IsOnlineFixApp(current)` to dynamically rewrite and dual-dispatch callbacks so achievements unlock reliably across all active games.
 
 ---
 
@@ -191,7 +191,7 @@ The dispatch layer handles small utility post-processing such as `GetAppID`. Fix
 
 On-demand encrypted app ticket minting via HTTP GET.
 
-When the Lua config calls `setEticket()` or `seteticketurl()`, the fetcher issues an HTTP request to the configured URL and writes the returned blob into BetterLumaCore's credential store. The eticket then feeds into the AppTicket forge pipeline for Denuvo-protected games that need a valid encrypted ticket to pass the DRM check.
+When the Lua config calls `setEticket()` or `seteticketurl()`, the fetcher issues an HTTP request to the configured URL and writes the returned blob into BetterLuma's credential store. The eticket then feeds into the AppTicket forge pipeline for Denuvo-protected games that need a valid encrypted ticket to pass the DRM check.
 
 ---
 
@@ -201,10 +201,10 @@ Detours `CreateProcessW` and `CreateProcessAsUserW` to inject `BetterLumaPayload
 
 When Steam spawns a manual `-onlinefix` game process, the CreateProcess hook claims the queued executable, creates the process suspended, loads the payload DLL, and resumes the thread. BetterLumaPayload then handles EOS bridge / lobby redirection for online-fix multiplayer. Steam Stub auto launches do not use this payload path.
 
-**Multi-Game & Multi-Process Child Resolution (BetterLumaCore Enhancement)**:
-BetterLumaCore supports launching and running multiple OnlineFix titles simultaneously (Kindof). In addition to primary process PIDs captured during `LaunchSuspended`, launcher-based games (such as Unreal Engine / Unity titles that spawn separate shipping binaries) are resolved in `ClaimFallbackRoute`. BetterLumaCore calls `SteamCapture::AssociateOnlineFixPid(childPid, targetAppId)` to associate child worker processes with their parent OnlineFix AppID, guaranteeing full attachment and IPC routing.
+**Multi-Game & Multi-Process Child Resolution (BetterLuma Enhancement)**:
+BetterLuma expands upon original LumaCore by supporting launching and running multiple OnlineFix titles simultaneously (Kindof). In original LumaCore, launcher-based games (such as Unreal Engine / Unity titles that spawn separate shipping binaries) were lost because only the initial suspended process was tracked. In BetterLuma, `ClaimFallbackRoute` resolves child processes and calls `SteamCapture::AssociateOnlineFixPid(childPid, targetAppId)` to associate child worker processes with their parent OnlineFix AppID, guaranteeing full attachment and IPC routing.
 
-*(Note: While BetterLumaCore fully maintains local process attachment and playtime tracking for all concurrent titles, Steamworks backend architecture limits a single Steam account to one active Spacewar (480) lobby at a time. Hosting a 480 lobby in one game will overwrite the joinable rich presence for the other - see README Known Issues).*
+*(Note: While BetterLuma fully maintains local process attachment and playtime tracking for all concurrent titles, Steamworks backend architecture limits a single Steam account to one active Spacewar (480) lobby at a time. Hosting a 480 lobby in one game will overwrite the joinable rich presence for the other - see README Known Issues).*
 
 ---
 
@@ -219,7 +219,7 @@ Default URL chain (HTTPS first, HTTP as last resort):
 2. `https://manifest.steam.run/api/manifest/{gid}`
 3. `http://gmrc.wudrm.com/manifest/{gid}`
 
-The first built-in provider is fetched with its required compatibility User-Agent internally. Custom URLs and the other fallback providers keep BetterLumaCore's normal runtime HTTP User-Agent.
+The first built-in provider is fetched with its required compatibility User-Agent internally. Custom URLs and the other fallback providers keep BetterLuma's normal runtime HTTP User-Agent.
 
 ---
 
@@ -240,10 +240,10 @@ This module arms single-byte breakpoints at the entry of several Steam functions
 
 `SteamCapture::NotifyLicenseChanged` uses the captured `g_pCUser` and resolved function pointers to push new ownership records into Steam's in-memory license tables and trigger an ownership refresh without restarting Steam.
 
-**Process Watcher Retention Bypass (`PidTransferCheck`) (BetterLumaCore Enhancement)**:
+**Process Watcher Retention Bypass (`PidTransferCheck`) (BetterLuma Enhancement)**:
 Inside `steamclient64.dll`, Steam executes an `InternalUpdateClientGame` loop (RVA `0x9C33E9`). When an OnlineFix process initializes Steamworks under Spacewar (480), Steam compares the running process AppID with the launched AppID (`cmp [rdi], rax; jne 0x9C3559`). The `jne` branch decrements the active game counter (`sub r14d, 1`) and detaches the process from Steam tracking, turning the green "STOP" button back to blue "PLAY" and halting playtime tracking.
 
-BetterLumaCore places a VEH breakpoint at `g_pidTransferCheckTarget` (`0x9C33E9`). When triggered, the handler verifies whether the PID belongs to an active OnlineFix game. If so, it adjusts `ctx->Rip` to `+6` (`0x9C33EF`), jumping over the detachment branch directly to the fallthrough logic. This preserves PID tracking under the real AppID while simultaneously allowing 480 multiplayer networking. The green "STOP" button remains active, and playtime increments continuously for all concurrent titles.
+BetterLuma places a VEH breakpoint at `g_pidTransferCheckTarget` (`0x9C33E9`). When triggered, the handler verifies whether the PID belongs to an active OnlineFix game. If so, it adjusts `ctx->Rip` to `+6` (`0x9C33EF`), jumping over the detachment branch directly to the fallthrough logic. This preserves PID tracking under the real AppID while simultaneously allowing 480 multiplayer networking. The green "STOP" button remains active, and playtime increments continuously for all concurrent titles.
 
 **Memory Access Safety (`SafeReadUint64`)**:
 All memory inspections in hook handlers and VEH callbacks are wrapped in Structured Exception Handling (`__try / __except`), preventing access violation crashes when reading volatile or invalid pointers.
@@ -260,7 +260,7 @@ Hooks `BBuildAndAsyncSendFrame` and `RecvPkt`.
 Steam communicates with the Steam Network (CM servers) using a protobuf-over-TCP framing. PacketRouter intercepts outgoing and incoming packet frames and replaces the content of specific message types:
 
 - `FamilyGroupsClient.NotifyRunningApps` - replaces the running-app list so family-sharing session checks on the CM side see the correct owner rather than the borrower account.
-- `Player.GetUserStats` and `ClientGetUserStats` - rewrite stats requests for Lua stats roots so achievements can load from BetterLumaCore's stats SteamID pool.
+- `Player.GetUserStats` and `ClientGetUserStats` - rewrite stats requests for Lua stats roots so achievements can load from BetterLuma's stats SteamID pool.
 - `CMsgClientGamesPlayed` - integrates with `SteamCapture`'s grace period to prevent race-condition unregistrations during concurrent game launches.
 
 Packet replacement uses a fixed-size ring-buffer pool to avoid heap allocation on the hot path.
@@ -274,7 +274,7 @@ setStat(1234567, "76561198028121353")  -- optional advanced override
 
 Numeric Lua filenames already mark that app as a stats root, so `Steam\config\stplug-in\1234567.lua` enables stats and achievements for app 1234567 without any `setStat` line. Body `addappid(...)` entries stay on the package, depot-key, ownership, and manifest paths only.
 
-When no SteamID override is provided, BetterLumaCore tries the built-in stats SteamID pool and remembers the first response that returns useful schema, stat, or achievement data.
+When no SteamID override is provided, BetterLuma tries the built-in stats SteamID pool and remembers the first response that returns useful schema, stat, or achievement data.
 
 ---
 
@@ -293,13 +293,13 @@ Hooks `LoadPackage`, `CheckAppOwnership`, `GetSubscribedApps`, and `SendCallback
 
 Detours `OptedInMask`, `IsCloudEnabledForApp`, native AutoCloud sync entrypoints, and `RequiresLegacyCDKey` against `steamclient64.dll`.
 
-- **`OptedInMask`**: swaps controller-mask requests for 480 launches to the real appid. In BetterLumaCore, this redirection is strictly isolated to `appId == 480`, preventing cross-game state contamination of controller configurations.
+- **`OptedInMask`**: swaps controller-mask requests for 480 launches to the real appid. In BetterLuma, this redirection is strictly isolated to `appId == 480`, preventing cross-game state contamination of controller configurations.
 - **Cloud save gate**: Lua-managed apps that are not owned by the active account return `false` for Steam's cloud-enabled query and have native AutoCloud sync jobs stopped before upload/delete work starts. Owned games, family-shared games, and unmanaged games still use Steam's original behavior.
 - **`RequiresLegacyCDKey`** - Steam asks the wrapper for a CD key on a small set of pre-2010 titles when ownership crosses certain code paths. For Lua-tracked appids the user has no real key, so the detour answers `false` and the prompt never fires. Without this hook those games refuse to launch.
 
 DLC ownership / install / license-update / ownership-ticket queries (`BIsDlcEnabled`, `IsAppDlcInstalled`, `BUpdateLicenses`, `BUpdateAppOwnershipTicket`) are intentionally not detoured here. Steam already returns the right answer for Lua-tracked appids through the existing `CheckAppOwnership` patch, so detouring those is redundant and risks stack corruption on x64 fastcall when an argument count or type is even slightly off.
 
-BetterLumaCore does not redirect Steam Cloud files or touch save folders on disk. If a user already has saves split between account folders like `0` and their Steam account ID, back up both folders before launching the game again and move the wanted save manually.
+BetterLuma does not redirect Steam Cloud files or touch save folders on disk. If a user already has saves split between account folders like `0` and their Steam account ID, back up both folders before launching the game again and move the wanted save manually.
 
 ---
 
@@ -308,9 +308,9 @@ BetterLumaCore does not redirect Steam Cloud files or touch save folders on disk
 VEH-based captures and hooks used by game-launch routing.
 
 - Arms a one-shot int3 on `CUser_SpawnProcess`. When Steam is about to launch a game, the VEH fires and checks whether the launch should use a route. Manual `-onlinefix` still opts into the 480 route.
-- Before selecting a route, validates the registry `AppTicket` against the active SteamID and target app ID. Known Steam Stub apps and route-accepted pre-spawn detections try to replace fallback target tickets with an app-7 forged target ticket before launch. If app 7 is missing, BetterLumaCore keeps an existing target-valid fallback instead of deleting it, but it logs that fallback clearly and does not write the unsigned minimal ticket for those wrappers.
+- Before selecting a route, validates the registry `AppTicket` against the active SteamID and target app ID. Known Steam Stub apps and route-accepted pre-spawn detections try to replace fallback target tickets with an app-7 forged target ticket before launch. If app 7 is missing, BetterLuma keeps an existing target-valid fallback instead of deleting it, but it logs that fallback clearly and does not write the unsigned minimal ticket for those wrappers.
 - SteamStub auto only activates from the known list or a high-confidence pre-spawn route signal such as `entry_bind_section`. Broad protection markers like `legacy_section`, `.xdata`, `.xpdata`, `.srdata`, `.arch`, OEP text, or generic wrapper text stay diagnostic-only and cannot route a game to 480 by themselves.
-- Route-accepted Steam Stub launches use the dedicated `steamstub-auto` path: BetterLumaCore rewrites only the launch `pGameID` from the real appid to 480, keeps CGameID/`SteamGameId` on 480 for Steam process tracking, patches only `SteamOverlayGameId` to the real appid, and resolves the real app internally for tickets/stats/achievements. If the ticket preflight fails, BetterLumaCore logs `steamstub-ticket-failed`.
+- Route-accepted Steam Stub launches use the dedicated `steamstub-auto` path: BetterLuma rewrites only the launch `pGameID` from the real appid to 480, keeps CGameID/`SteamGameId` on 480 for Steam process tracking, patches only `SteamOverlayGameId` to the real appid, and resolves the real app internally for tickets/stats/achievements. If the ticket preflight fails, BetterLuma logs `steamstub-ticket-failed`.
 - Hooks `BuildSpawnEnvBlock` (via string XRef, since this function is only called at launch and not startup). Manual `-onlinefix` keeps the old overlay patch. Dedicated SteamStub auto keeps CGameID on 480 and patches only the overlay appid to the real app.
 - SteamStub auto launch identity must not change again until logs verify the ownership-ticket reply shape: `IPC_REPLY_TAG`, fixed `pTicket` slot, signed total-size return value, and `piSignature = piAppId + 4` for forged tickets.
 - Retries startup Package 0 injection after package-info capture, user capture, a longer post-hook retry window, and throttled SteamUI run-frame retries. Offline startup can still update the local package vector when Package 0 and vector growth are ready, even if Steam never reaches the user-license refresh path.
@@ -338,7 +338,7 @@ This is more update-proof for functions called only at game-launch time. It is i
 
 ## Lua configuration format
 
-`.lua` files are placed in `Steam\config\stplug-in\<appid>.lua`. BetterLumaCore watches this directory and reloads files as they change.
+`.lua` files are placed in `Steam\config\stplug-in\<appid>.lua`. BetterLuma watches this directory and reloads files as they change.
 
 ### App and depot registration
 
@@ -362,7 +362,7 @@ addtoken(1234567, 12345678901234567890)
 setManifestid(1001, "1234567890123456789")
 ```
 
-Pins the manifest GID for depot 1001. BetterLumaCore reports this GID when Steam asks for the active manifest.
+Pins the manifest GID for depot 1001. BetterLuma reports this GID when Steam asks for the active manifest.
 
 ### App tickets and etickets
 
@@ -402,7 +402,7 @@ setStat(1234567)
 setStat(1234567, "76561198028121353")  -- optional advanced override
 ```
 
-Numeric Lua filenames auto-enable stats and achievements for the filename app ID, so `1234567.lua` normally needs no stats line at all. Use `setStat(appId)` only for manual or non-filename cases. The two-argument form stays supported for old configs that need a specific SteamID, but normal configs should let BetterLumaCore use its built-in stats SteamID pool.
+Numeric Lua filenames auto-enable stats and achievements for the filename app ID, so `1234567.lua` normally needs no stats line at all. Use `setStat(appId)` only for manual or non-filename cases. The two-argument form stays supported for old configs that need a specific SteamID, but normal configs should let BetterLuma use its built-in stats SteamID pool.
 
 ### Manifest and key fetching
 
@@ -452,7 +452,7 @@ All other settings use built-in defaults.
 
 ## Logging
 
-Logging is compiled in only for Debug builds (`LUMACORE_LOGGING_ENABLED` define). Release builds compile all `LOG_*` macros to no-ops so there is no runtime overhead.
+Logging is compiled in only for Debug builds (`BETTERLUMA_LOGGING_ENABLED` define). Release builds compile all `LOG_*` macros to no-ops so there is no runtime overhead.
 
 When enabled, logs are written to `Steam\betterluma\` alongside `BetterLuma.dll`. Each module writes to its own file:
 

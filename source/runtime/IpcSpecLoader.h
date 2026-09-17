@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -50,7 +50,7 @@ namespace IpcSpecLoader {
     // Returns true when a spec TOML was loaded and parsed successfully.
     bool IsLoaded();
 
-    // Drop all loaded specs. Called from LumaCore::Detach.
+    // Drop all loaded specs. Called from BetterLuma::Detach.
     void Reset();
 
 } // namespace IpcSpecLoader

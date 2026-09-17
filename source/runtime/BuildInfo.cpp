@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
 
@@ -8,22 +8,22 @@
 #include "BuildStamp.h"
 #endif
 
-#ifndef LUMACORE_VERSION_STRING
-#define LUMACORE_VERSION_STRING "debug"
+#ifndef BETTERLUMA_VERSION_STRING
+#define BETTERLUMA_VERSION_STRING "debug"
 #endif
 
-#ifndef LUMACORE_BUILD_STAMP_STRING
-#define LUMACORE_BUILD_STAMP_STRING __DATE__ " " __TIME__
+#ifndef BETTERLUMA_BUILD_STAMP_STRING
+#define BETTERLUMA_BUILD_STAMP_STRING __DATE__ " " __TIME__
 #endif
 
 namespace BuildInfo {
 
     const char* Version() {
-        return LUMACORE_VERSION_STRING;
+        return BETTERLUMA_VERSION_STRING;
     }
 
     const char* BuildStamp() {
-        return LUMACORE_BUILD_STAMP_STRING;
+        return BETTERLUMA_BUILD_STAMP_STRING;
     }
 
 } // namespace BuildInfo

@@ -1,17 +1,17 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
 //
 // Tiny WinHTTP-based GET helper used by the lua sandbox so plugin .lua
-// files can pull a runtime manifest off a clearnet host without LumaCore
+// files can pull a runtime manifest off a clearnet host without betterluma
 // having to ship a manifest cache itself. Hard caps in place: 8 MiB body
 // ceiling, single-host, GET only, no redirect chains followed beyond what
 // WinHTTP does on its own. Plugin scripts call this through the lua
 // binding `lc_http_get(url) -> body, status_code` registered in LuaState.
 
-#ifndef LUMACORE_RUNTIME_HTTP_H
-#define LUMACORE_RUNTIME_HTTP_H
+#ifndef BETTERLUMA_RUNTIME_HTTP_H
+#define BETTERLUMA_RUNTIME_HTTP_H
 
 #include <cstdint>
 #include <string>

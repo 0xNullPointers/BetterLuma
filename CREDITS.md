@@ -1,8 +1,8 @@
 # Credits
 
-## BetterLumaCore
+## BetterLuma
 
-BetterLumaCore represents the continued development and feature enhancement of the LumaCore project, focused on continuing development and introducing features long desired for the platform.
+BetterLuma represents the continued development and feature enhancement of the LumaCore project, focused on continuing development and introducing features long desired for the platform.
 
 The original work is done by Midrags, and the copyright of all the files is hence held by them.
 All subsequent modifications, architectural enhancements, and continued development are done by 0xBadCod3.

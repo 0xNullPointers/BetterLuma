@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
 
@@ -15,7 +15,7 @@ namespace LoaderGate {
     // Registers the thread ID of Bootstrap::Run so its module loads are never gated.
     void SetInitThreadId(DWORD tid);
 
-    // Signals that LumaCore bootstrap has completed and all hooks/patterns are primed.
+    // Signals that betterluma bootstrap has completed and all hooks/patterns are primed.
     // Releases any pending threads held at the LoadLibraryExW gate.
     void SignalBootstrapReady();
 

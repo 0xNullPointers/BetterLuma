@@ -1,4 +1,4 @@
-// BetterLumaCore - Steam client hook layer.
+// BetterLuma - Steam client hook layer.
 // Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
@@ -48,7 +48,7 @@ namespace LuaLoader::Internal {
     // mirror. Anything not on the combined list returns 403/empty without
     // the network ever being reached.
     namespace {
-        // Hardcoded baseline. Anyone trying to run an official LumaCore
+        // Hardcoded baseline. Anyone trying to run an official betterluma
         // workflow needs these regardless of config. Lowercased once on
         // declaration so the comparison loop is plain memcmp.
         constexpr std::string_view kHttpBaselineHosts[] = {
