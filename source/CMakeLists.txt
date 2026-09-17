@@ -201,9 +201,6 @@ add_library(dwmapi SHARED
     proxy/LcDwmProxy.cpp
 )
 set_target_properties(dwmapi PROPERTIES PREFIX "" OUTPUT_NAME "dwmapi")
-if(MSVC)
-    target_link_options(dwmapi PRIVATE "/PDBALTPATH:%_PDB%")
-endif()
 
 # ---------------------------------------------------------------------------
 # xinput1_4.dll hijack - secondary loader DLL placed alongside Steam.
@@ -213,8 +210,42 @@ add_library(xinput1_4 SHARED
     proxy/LcXInputProxy.def
 )
 set_target_properties(xinput1_4 PROPERTIES PREFIX "" OUTPUT_NAME "xinput1_4")
+
+# ---------------------------------------------------------------------------
+# MSVC Compiler & Linker Configuration
+# ---------------------------------------------------------------------------
 if(MSVC)
-    target_link_options(xinput1_4 PRIVATE "/PDBALTPATH:%_PDB%")
+    set(LC_COMPILE_OPTIONS
+        /permissive-
+        /Zc:preprocessor
+        /Zc:__cplusplus
+        /guard:cf-
+        /GF
+        /Gy
+        /Gw
+    )
+
+    set(LC_COMMON_LINK_OPTIONS
+        "/PDBALTPATH:%_PDB%"
+        "/Brepro"
+        "/DYNAMICBASE"
+        "/HIGHENTROPYVA"
+        "/NXCOMPAT"
+    )
+
+    # Release-specific link options:
+    set(LC_RELEASE_LINK_OPTIONS
+        "/OPT:REF"
+        "/OPT:NOICF"
+    )
+
+    foreach(_tgt IN ITEMS LumaCore LumaCorePayload dwmapi xinput1_4)
+        target_compile_options(${_tgt} PRIVATE ${LC_COMPILE_OPTIONS})
+        target_link_options(${_tgt} PRIVATE
+            ${LC_COMMON_LINK_OPTIONS}
+            $<$<CONFIG:Release>:${LC_RELEASE_LINK_OPTIONS}>
+        )
+    endforeach()
 endif()
 
 
