@@ -8,6 +8,7 @@
 #include "core/entry.h"
 #include "runtime/Logger.h"
 #include "runtime/RuntimeHttp.h"
+#include "runtime/HashUtil.h"
 #include "config/Settings.h"
 #include "patterns/PatternSig.h"
 
@@ -49,53 +50,8 @@ namespace IpcSpecLoader {
 
         // ── small helpers ───────────────────────────────────────────────────
 
-        std::string ToHexLower(const std::uint8_t* data, std::size_t len) {
-            static const char kDigits[] = "0123456789abcdef";
-            std::string out;
-            out.resize(len * 2);
-            for (std::size_t i = 0; i < len; ++i) {
-                out[2 * i + 0] = kDigits[(data[i] >> 4) & 0xF];
-                out[2 * i + 1] = kDigits[data[i] & 0xF];
-            }
-            return out;
-        }
-
-        std::string Sha256OfFile(const std::wstring& path) {
-            HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ,
-                                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                       nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (hFile == INVALID_HANDLE_VALUE) return {};
-
-            BCRYPT_ALG_HANDLE  hAlg  = nullptr;
-            BCRYPT_HASH_HANDLE hHash = nullptr;
-            std::array<std::uint8_t, 32> digest{};
-            std::vector<std::uint8_t> buf(1u << 20);
-            std::string out;
-
-            do {
-                if (BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) break;
-                if (BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0) != 0) break;
-
-                bool ok = true;
-                for (;;) {
-                    DWORD got = 0;
-                    if (!ReadFile(hFile, buf.data(), static_cast<DWORD>(buf.size()), &got, nullptr)) {
-                        ok = false; break;
-                    }
-                    if (got == 0) break;
-                    if (BCryptHashData(hHash, buf.data(), got, 0) != 0) { ok = false; break; }
-                }
-                if (!ok) break;
-                if (BCryptFinishHash(hHash, digest.data(), static_cast<ULONG>(digest.size()), 0) != 0) break;
-
-                out = ToHexLower(digest.data(), digest.size());
-            } while (false);
-
-            if (hHash) BCryptDestroyHash(hHash);
-            if (hAlg)  BCryptCloseAlgorithmProvider(hAlg, 0);
-            CloseHandle(hFile);
-            return out;
-        }
+        using HashUtil::ToHexLower;
+        using HashUtil::Sha256OfFile;
 
         std::wstring ModuleDiskPathW() {
             wchar_t buf[MAX_PATH] = {};
@@ -318,15 +274,18 @@ namespace IpcSpecLoader {
 
     // ── public surface ──────────────────────────────────────────────────────
 
-    void Load() {
-        std::call_once(g_loadFlag, [] {
-            std::wstring wpath = ModuleDiskPathW();
-            if (wpath.empty()) {
-                LOG_MISC_WARN("IpcSpecLoader: cannot resolve steamclient path");
-                return;
+    void Load(const std::string& knownSha) {
+        std::call_once(g_loadFlag, [knownSha] {
+            std::string sha = knownSha;
+            if (sha.size() != 64) {
+                std::wstring wpath = ModuleDiskPathW();
+                if (wpath.empty()) {
+                    LOG_MISC_WARN("IpcSpecLoader: cannot resolve steamclient path");
+                    return;
+                }
+                sha = Sha256OfFile(wpath);
             }
 
-            std::string sha = Sha256OfFile(wpath);
             if (sha.size() != 64) {
                 LOG_MISC_DEBUG("IpcSpecLoader: SHA256 failed for steamclient");
                 return;

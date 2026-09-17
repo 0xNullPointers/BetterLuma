@@ -36,12 +36,11 @@ namespace IpcSpecLoader {
         std::vector<MethodSpec> methods;
     };
 
-    // Load IPC specs for the steamclient module. Hashes diversion_hModule
-    // on disk, tries local cache, falls back to the network chain. Safe
-    // to call multiple times - subsequent calls are no-ops when already
-    // loaded. Must be called from InitThread after PatternFetcher finishes
-    // its steamclient leg so the cache dir exists.
-    void Load();
+    // Load IPC specs for the steamclient module. Uses knownSha if provided,
+    // otherwise hashes diversion_hModule on disk, tries local cache, and falls back
+    // to the network chain. Safe to call multiple times - subsequent calls are
+    // no-ops when already loaded.
+    void Load(const std::string& knownSha = "");
 
     // Resolve the funcHash for a qualified name like "IClientUser::GetSteamID".
     // Returns nullopt when the spec is not loaded or the method is absent.

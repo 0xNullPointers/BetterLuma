@@ -83,6 +83,7 @@ add_library(BetterLuma SHARED
     runtime/RemoteTools.cpp
     runtime/IpcSpecLoader.cpp
     runtime/BootDiag.cpp
+    runtime/HashUtil.cpp
     runtime/CredentialStore.cpp
     runtime/EticketFetcher.cpp
     runtime/TicketProvider.cpp

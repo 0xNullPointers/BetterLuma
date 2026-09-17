@@ -139,6 +139,86 @@ namespace CoreInit {
         // CopyFileA is retried up to 25 times (3 seconds total) because steamclient64.dll can be
         // briefly locked by the Steam service during early startup. Same retry logic for LoadLibraryA.
         // Returns false if either operation fails after all retries.
+        // Verifies whether dstPath is already an exact, uncorrupted replica of srcPath.
+        // Checks:
+        // 1. Both files exist and have non-zero identical sizes.
+        // 2. Exact timestamp equality (CompareFileTime == 0).
+        // 3. 4 KB PE header comparison (DOS header, NT header, PE checksum, section table)
+        //    to guard against truncated/corrupted copies without reading 40 MB.
+        bool IsUpToDate(const char* srcPath, const char* dstPath) {
+            WIN32_FILE_ATTRIBUTE_DATA srcAttr{}, dstAttr{};
+            if (!GetFileAttributesExA(srcPath, GetFileExInfoStandard, &srcAttr) ||
+                !GetFileAttributesExA(dstPath, GetFileExInfoStandard, &dstAttr)) {
+                return false;
+            }
+
+            if (srcAttr.nFileSizeHigh != dstAttr.nFileSizeHigh ||
+                srcAttr.nFileSizeLow  != dstAttr.nFileSizeLow  ||
+                (srcAttr.nFileSizeHigh == 0 && srcAttr.nFileSizeLow == 0)) {
+                return false;
+            }
+
+            if (CompareFileTime(&srcAttr.ftLastWriteTime, &dstAttr.ftLastWriteTime) != 0) {
+                return false;
+            }
+
+            HANDLE hSrc = CreateFileA(srcPath, GENERIC_READ,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hSrc == INVALID_HANDLE_VALUE) return false;
+
+            HANDLE hDst = CreateFileA(dstPath, GENERIC_READ,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hDst == INVALID_HANDLE_VALUE) {
+                CloseHandle(hSrc);
+                return false;
+            }
+
+            constexpr DWORD kHeaderSize = 4096;
+            char srcBuf[kHeaderSize];
+            char dstBuf[kHeaderSize];
+            DWORD srcRead = 0, dstRead = 0;
+
+            bool readOk = ReadFile(hSrc, srcBuf, kHeaderSize, &srcRead, nullptr) &&
+                          ReadFile(hDst, dstBuf, kHeaderSize, &dstRead, nullptr);
+            CloseHandle(hSrc);
+            CloseHandle(hDst);
+
+            if (!readOk || srcRead == 0 || srcRead != dstRead) {
+                return false;
+            }
+
+            return memcmp(srcBuf, dstBuf, srcRead) == 0;
+        }
+
+        bool CopyWithRetry(const char* srcPath, const char* dstPath, int maxRetries, int delayMs) {
+            int attempts = 0;
+            while (!CopyFileA(srcPath, dstPath, FALSE)) {
+                if (++attempts >= maxRetries) {
+                    LOG_COREIN_ERROR("\"stage\" \"Diversion\" \"err\" \"copy-fail\" \"from\" \"{}\" \"to\" \"{}\"", srcPath, dstPath);
+                    return false;
+                }
+                LOG_COREIN_WARN("\"stage\" \"Diversion\" \"act\" \"copy-retry\" {} err={}", attempts, GetLastError());
+                Sleep(delayMs);
+            }
+
+            // Sync destination timestamps with source to guarantee exact CompareFileTime equality
+            WIN32_FILE_ATTRIBUTE_DATA srcAttr{};
+            if (GetFileAttributesExA(srcPath, GetFileExInfoStandard, &srcAttr)) {
+                HANDLE hDst = CreateFileA(dstPath, FILE_WRITE_ATTRIBUTES,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                          nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (hDst != INVALID_HANDLE_VALUE) {
+                    SetFileTime(hDst, &srcAttr.ftCreationTime, &srcAttr.ftLastAccessTime, &srcAttr.ftLastWriteTime);
+                    CloseHandle(hDst);
+                }
+            }
+            return true;
+        }
+
+        // Copies steamclient64.dll to bin\lcoverlay.dll (if not already up to date)
+        // and loads the copy so Steam's UI layer uses the diversion module.
         bool PrepareAndLoad()
         {
             constexpr int kCopyRetries  = 25;
@@ -175,28 +255,33 @@ namespace CoreInit {
             char binDir[MAX_PATH];
             sprintf_s(binDir, MAX_PATH, "%s\\bin", SteamInstallPath);
             CreateDirectoryA(binDir, nullptr);
-            // Retry: steamclient64.dll may be briefly locked during Steam startup
-            {
-                int attempts = 0;
-                while (!CopyFileA(SteamclientPath, DiversionPath, FALSE)) {
-                    if (++attempts >= kCopyRetries) {
-                        LOG_COREIN_ERROR("\"stage\" \"Diversion\" \"err\" \"copy-fail\" \"from\" \"{}\" \"to\" \"{}\"", SteamclientPath, DiversionPath);
-                        return false;
-                    }
-                    LOG_COREIN_WARN("\"stage\" \"Diversion\" \"act\" \"copy-retry\" {} err={}", attempts, GetLastError());
-                    Sleep(kRetryDelayMs);
+
+            bool upToDate = IsUpToDate(SteamclientPath, DiversionPath);
+            if (upToDate) {
+                LOG_COREIN_INFO("\"stage\" \"Diversion\" \"act\" \"up-to-date\" \"path\" \"{}\"", DiversionPath);
+            } else {
+                LOG_COREIN_INFO("\"stage\" \"Diversion\" \"act\" \"copy-start\" \"from\" \"{}\" \"to\" \"{}\"", SteamclientPath, DiversionPath);
+                if (!CopyWithRetry(SteamclientPath, DiversionPath, kCopyRetries, kRetryDelayMs)) {
+                    return false;
                 }
             }
-            {
-                int attempts = 0;
-                while (!(diversion_hModule = LoadLibraryA(DiversionPath))) {
-                    if (++attempts >= kLoadRetries) {
-                        LOG_COREIN_ERROR("\"stage\" \"Diversion\" \"err\" \"load-fail\" \"path\" \"{}\"", DiversionPath);
-                        return false;
+
+            int attempts = 0;
+            while (!(diversion_hModule = LoadLibraryA(DiversionPath))) {
+                if (upToDate) {
+                    // Cached copy failed to load; force a fresh copy and retry
+                    LOG_COREIN_WARN("\"stage\" \"Diversion\" \"act\" \"cached-load-failed-recopying\" err={}", GetLastError());
+                    upToDate = false;
+                    if (CopyWithRetry(SteamclientPath, DiversionPath, kCopyRetries, kRetryDelayMs)) {
+                        continue;
                     }
-                    LOG_COREIN_WARN("\"stage\" \"Diversion\" \"act\" \"load-retry\" {} err={}", attempts, GetLastError());
-                    Sleep(kRetryDelayMs);
                 }
+                if (++attempts >= kLoadRetries) {
+                    LOG_COREIN_ERROR("\"stage\" \"Diversion\" \"err\" \"load-fail\" \"path\" \"{}\"", DiversionPath);
+                    return false;
+                }
+                LOG_COREIN_WARN("\"stage\" \"Diversion\" \"act\" \"load-retry\" {} err={}", attempts, GetLastError());
+                Sleep(kRetryDelayMs);
             }
             LOG_COREIN_INFO("\"stage\" \"Diversion\" \"act\" \"loaded\" \"path\" \"{}\"", DiversionPath);
             HookStatus::SetDiversionState(true, "loaded");
@@ -306,10 +391,10 @@ namespace CoreInit {
             }
 
             // ── IPC method spec loader ───────────────────────────────
-            IpcSpecLoader::Load();
+            IpcSpecLoader::Load(pcResult.sha);
 
             // ── IPC method metadata (ipc_methods.toml) ─────────────
-            IpcLoader::Load(SteamclientPath);
+            IpcLoader::Load(SteamclientPath, pcResult.sha);
 
             // ── Diagnostics capture ──────────────────────────────────
             BootDiag::Capture(pcResult.sha);
