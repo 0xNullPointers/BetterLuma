@@ -1,4 +1,5 @@
 // BetterLuma - Steam client hook layer.
+// Modified from LumaCore, 2026.
 // Distributed under the GNU General Public License v3 or later.
 // Original work and copyright: see README.md.
 
@@ -14,9 +15,11 @@ namespace LoaderGate {
 
     using LoadLibraryExW_t = HMODULE(WINAPI*)(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags);
 
-    static LoadLibraryExW_t  oLoadLibraryExW = nullptr;
-    static HANDLE            g_hBootstrapReadyEvent = nullptr;
-    static std::atomic<bool> g_isReady{false};
+    static LoadLibraryExW_t  oLoadLibraryExW     = nullptr;
+    static HANDLE            g_hClientReadyEvent = nullptr;
+    static HANDLE            g_hUiReadyEvent     = nullptr;
+    static std::atomic<bool> g_isClientReady{false};
+    static std::atomic<bool> g_isUiReady{false};
     static std::atomic<bool> g_installed{false};
     static DWORD             g_initThreadId = 0;
 
@@ -52,18 +55,16 @@ namespace LoaderGate {
             return oLoadLibraryExW(lpLibFileName, hFile, dwFlags);
         }
 
-        // Host process (steam.exe) is loading steamui or steamclient.
-        // Block until betterluma background bootstrap has finished all pattern
-        // downloads and installed critical hooks.
-        if (!g_isReady.load(std::memory_order_acquire) && g_hBootstrapReadyEvent) {
-            LOG_GATE_INFO("\"stage\" \"LoaderGate\" \"act\" \"hold\" \"module\" \"{}\" \"tid\" {}",
-                          isSteamClient ? "steamclient64" : "steamui",
-                          GetCurrentThreadId());
-            WaitForSingleObject(g_hBootstrapReadyEvent, 45000); // 45s safety timeout
-        }
-
-        // Redirection leg: steamclient64.dll loads are diverted to lcoverlay.dll
+        // Stage 1 Gate: steamclient64.dll loads are held until diversion is prepared
+        // and core steamclient hooks are installed.
         if (isSteamClient) {
+            if (!g_isClientReady.load(std::memory_order_acquire) && g_hClientReadyEvent) {
+                LOG_GATE_INFO("\"stage\" \"LoaderGate\" \"act\" \"hold\" \"module\" \"steamclient64\" \"tid\" {}",
+                              GetCurrentThreadId());
+                WaitForSingleObject(g_hClientReadyEvent, 45000); // 45s safety timeout
+            }
+
+            // Redirection leg: steamclient64.dll loads are diverted to lcoverlay.dll
             if (DiversionPath[0] != '\0') {
                 wchar_t wDiversion[MAX_PATH] = {};
                 MultiByteToWideChar(CP_ACP, 0, DiversionPath, -1, wDiversion, MAX_PATH);
@@ -79,8 +80,14 @@ namespace LoaderGate {
             }
         }
 
-        // SteamUI leg: map steamui.dll, then immediately attach hooks before returning
+        // Stage 2 Gate: steamui.dll loads are held until UI patterns and full bootstrap are complete
         if (isSteamUi) {
+            if (!g_isUiReady.load(std::memory_order_acquire) && g_hUiReadyEvent) {
+                LOG_GATE_INFO("\"stage\" \"LoaderGate\" \"act\" \"hold\" \"module\" \"steamui\" \"tid\" {}",
+                              GetCurrentThreadId());
+                WaitForSingleObject(g_hUiReadyEvent, 45000); // 45s safety timeout
+            }
+
             HMODULE hSteamUI = oLoadLibraryExW(lpLibFileName, hFile, dwFlags);
             constexpr DWORD kDataFileFlags = LOAD_LIBRARY_AS_DATAFILE |
                                             LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE |
@@ -101,7 +108,8 @@ namespace LoaderGate {
             return;
         }
 
-        g_hBootstrapReadyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        g_hClientReadyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        g_hUiReadyEvent     = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
         HMODULE hKernel = GetModuleHandleW(L"kernelbase.dll");
         if (!hKernel) {
@@ -126,12 +134,26 @@ namespace LoaderGate {
         g_initThreadId = tid;
     }
 
-    void SignalBootstrapReady() {
-        g_isReady.store(true, std::memory_order_release);
-        if (g_hBootstrapReadyEvent) {
-            SetEvent(g_hBootstrapReadyEvent);
+    void SignalClientReady() {
+        g_isClientReady.store(true, std::memory_order_release);
+        if (g_hClientReadyEvent) {
+            SetEvent(g_hClientReadyEvent);
         }
-        LOG_GATE_INFO("\"stage\" \"LoaderGate\" \"act\" \"signaled\"");
+        LOG_GATE_INFO("\"stage\" \"LoaderGate\" \"act\" \"client_signaled\"");
+    }
+
+    void SignalUiReady() {
+        g_isUiReady.store(true, std::memory_order_release);
+        if (g_hUiReadyEvent) {
+            SetEvent(g_hUiReadyEvent);
+        }
+        LOG_GATE_INFO("\"stage\" \"LoaderGate\" \"act\" \"ui_signaled\"");
+    }
+
+    void SignalBootstrapReady() {
+        SignalClientReady();
+        SignalUiReady();
+        LOG_GATE_INFO("\"stage\" \"LoaderGate\" \"act\" \"bootstrap_signaled\"");
     }
 
     void Uninstall() {
@@ -151,14 +173,26 @@ namespace LoaderGate {
             oLoadLibraryExW = nullptr;
         }
 
-        if (g_hBootstrapReadyEvent) {
-            CloseHandle(g_hBootstrapReadyEvent);
-            g_hBootstrapReadyEvent = nullptr;
+        if (g_hClientReadyEvent) {
+            CloseHandle(g_hClientReadyEvent);
+            g_hClientReadyEvent = nullptr;
+        }
+        if (g_hUiReadyEvent) {
+            CloseHandle(g_hUiReadyEvent);
+            g_hUiReadyEvent = nullptr;
         }
     }
 
+    bool IsClientReady() {
+        return g_isClientReady.load(std::memory_order_acquire);
+    }
+
+    bool IsUiReady() {
+        return g_isUiReady.load(std::memory_order_acquire);
+    }
+
     bool IsBootstrapReady() {
-        return g_isReady.load(std::memory_order_acquire);
+        return IsClientReady() && IsUiReady();
     }
 
 } // namespace LoaderGate

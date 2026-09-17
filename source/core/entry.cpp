@@ -22,6 +22,7 @@
 #include "runtime/BuildInfo.h"
 
 #include <atomic>
+#include <future>
 #include <mutex>
 #include <string>
 #include <string_view>// ═══════════════════════════════════════════════════════════════════════
@@ -355,6 +356,47 @@ namespace CoreInit {
             BuildId::Detect();
             HookStatus::SetBuildId(g_steamBuildId);
 
+            // ── TASK 1: Dispatch SteamUI pattern loading asynchronously on background thread ──
+            wchar_t wSteamuiPath[MAX_PATH] = {};
+            MultiByteToWideChar(CP_ACP, 0, SteamuiPath, -1, wSteamuiPath, MAX_PATH);
+            auto steamUiFuture = std::async(std::launch::async, [wSteamuiPath]() -> PatternFetcher::PatternResult {
+                try {
+                    return PatternFetcher::LoadForPath(wSteamuiPath, "steamui", GetModuleHandleA("steamui.dll"));
+                } catch (const std::exception& e) {
+                    LOG_COREIN_ERROR("\"stage\" \"Patterns\" \"module\" \"steamui\" \"err\" \"exception\" \"msg\" \"{}\"", e.what());
+                    return PatternFetcher::PatternResult{};
+                } catch (...) {
+                    LOG_COREIN_ERROR("\"stage\" \"Patterns\" \"module\" \"steamui\" \"err\" \"unknown_exception\"");
+                    return PatternFetcher::PatternResult{};
+                }
+            });
+
+            // ── TASK 2: Dispatch Lua directory parsing asynchronously on background thread ──
+            std::vector<std::string> watchDirs = Settings::luaPaths;
+            std::filesystem::path defaultLuaPath = std::filesystem::path(LuaDir).lexically_normal().make_preferred();
+            bool hasDefault = false;
+            for (const auto& dir : watchDirs) {
+                if (std::filesystem::path(dir).lexically_normal().make_preferred() == defaultLuaPath) {
+                    hasDefault = true;
+                    break;
+                }
+            }
+            if (!hasDefault) {
+                watchDirs.push_back(defaultLuaPath.string());
+            }
+
+            auto luaFuture = std::async(std::launch::async, [watchDirs]() {
+                try {
+                    for (const auto& dir : watchDirs)
+                        LuaLoader::ParseDirectory(dir);
+                } catch (const std::exception& e) {
+                    LOG_COREIN_ERROR("\"stage\" \"Lua\" \"err\" \"exception\" \"msg\" \"{}\"", e.what());
+                } catch (...) {
+                    LOG_COREIN_ERROR("\"stage\" \"Lua\" \"err\" \"unknown_exception\"");
+                }
+            });
+
+            // ── TASK 3: Main thread: Prepare diversion module ──
             if (!Diversion::PrepareAndLoad()) {
                 LOG_COREIN_ERROR("\"stage\" \"Bootstrap\" \"err\" \"diversion-fail\"");
                 HookStatus::SetTomlAvailability("steamclient", false);
@@ -372,15 +414,49 @@ namespace CoreInit {
                        static_cast<unsigned>(pcResult.entries.size()),
                        pcResult.ok ? 1 : 0);
 
+            // ── Parallelize IPC spec loader and IPC method loader ────
+            auto ipcSpecFuture = std::async(std::launch::async, [&pcResult]() {
+                try {
+                    IpcSpecLoader::Load(pcResult.sha);
+                } catch (const std::exception& e) {
+                    LOG_COREIN_ERROR("\"stage\" \"IpcSpecLoader\" \"err\" \"exception\" \"msg\" \"{}\"", e.what());
+                } catch (...) {
+                    LOG_COREIN_ERROR("\"stage\" \"IpcSpecLoader\" \"err\" \"unknown_exception\"");
+                }
+            });
+
+            try {
+                IpcLoader::Load(SteamclientPath, pcResult.sha);
+            } catch (const std::exception& e) {
+                LOG_COREIN_ERROR("\"stage\" \"IpcLoader\" \"err\" \"exception\" \"msg\" \"{}\"", e.what());
+            } catch (...) {
+                LOG_COREIN_ERROR("\"stage\" \"IpcLoader\" \"err\" \"unknown_exception\"");
+            }
+
+            ipcSpecFuture.get();
+
+            // ── Attach ALL core hooks on steamclient ─────────────────
             HookStatus::SetStartupPhase("installing_critical_hooks");
             PackagePatch::Install();
             SteamCapture::Install();
+            IpcHooks::Install();
+            DenuvoAuth::Init();
+            BetterLuma::Attach();
 
-            // ── Steamui leg: synchronous cache + network from on-disk binary ─────────
-            wchar_t wSteamuiPath[MAX_PATH] = {};
-            MultiByteToWideChar(CP_ACP, 0, SteamuiPath, -1, wSteamuiPath, MAX_PATH);
-            PatternFetcher::PatternResult puResult =
-                PatternFetcher::LoadForPath(wSteamuiPath, "steamui", GetModuleHandleA("steamui.dll"));
+            // ── STAGE 1 COMPLETE: Open client gate ───────────────────
+            // Steam's loader thread unblocks immediately, returning the diverted
+            // steamclient module handle and allowing Steam symbol resolution to proceed.
+            LoaderGate::SignalClientReady();
+            SignalHooksInstalled();
+            LOG_COREIN_INFO("\"stage\" \"Bootstrap\" \"act\" \"client_gate_opened\"");
+
+            // ── Diagnostics capture ──────────────────────────────────
+            BootDiag::Capture(pcResult.sha);
+            if (!IpcSpecLoader::IsLoaded() && !IpcLoader::IsLoaded())
+                BootDiag::ReportMissing();
+
+            // ── Wait for SteamUI patterns to finish loading ──────────
+            PatternFetcher::PatternResult puResult = steamUiFuture.get();
             LOG_COREIN_INFO("\"stage\" \"Patterns\" \"module\" \"steamui\" \"sha\" \"{}\" \"entries\" {} \"ok\" {}",
                        puResult.sha.empty() ? "<unknown>" : puResult.sha,
                        static_cast<unsigned>(puResult.entries.size()),
@@ -389,17 +465,6 @@ namespace CoreInit {
                 LOG_COREIN_INFO("\"stage\" \"Patterns\" \"module\" \"steamui\" \"act\" \"deferred\"");
                 Patterns::StartSteamUiLateRetryLoop();
             }
-
-            // ── IPC method spec loader ───────────────────────────────
-            IpcSpecLoader::Load(pcResult.sha);
-
-            // ── IPC method metadata (ipc_methods.toml) ─────────────
-            IpcLoader::Load(SteamclientPath, pcResult.sha);
-
-            // ── Diagnostics capture ──────────────────────────────────
-            BootDiag::Capture(pcResult.sha);
-            if (!IpcSpecLoader::IsLoaded() && !IpcLoader::IsLoaded())
-                BootDiag::ReportMissing();
 
             // SHAs first, then per-module availability.
             {
@@ -413,43 +478,24 @@ namespace CoreInit {
             HookStatus::SetStartupPhase("patterns_loaded");
             HookStatus::WriteToDisk();
 
-            // ── SteamUI::CoreHook() must be early to catch LoadModuleWithPath ──
+            // ── SteamUI::CoreHook() must be installed to catch LoadModuleWithPath ──
             HookStatus::SetStartupPhase("installing_hooks");
             SteamUI::CoreHook();
 
-            std::vector<std::string> watchDirs = Settings::luaPaths;
-            std::filesystem::path defaultLuaPath = std::filesystem::path(LuaDir).lexically_normal().make_preferred();
-            bool hasDefault = false;
-            for (const auto& dir : watchDirs) {
-                if (std::filesystem::path(dir).lexically_normal().make_preferred() == defaultLuaPath) {
-                    hasDefault = true;
-                    break;
-                }
-            }
-            if (!hasDefault) {
-                watchDirs.push_back(defaultLuaPath.string());
-            }
-            for (const auto& dir : watchDirs)
-                LuaLoader::ParseDirectory(dir);
-
+            // ── Wait for Lua background parsing to complete ──────────
+            luaFuture.get();
             SteamCapture::TryStartupPackageInjection("lua-loaded");
-
             DirWatch::Start(watchDirs);
 
-            // ── IPC dispatch layer (ticket spoofing handlers) ──────
-            IpcHooks::Install();
-
-            // ── Denuvo authorization state machine ──────────────────
-            DenuvoAuth::Init();
-
-            BetterLuma::Attach();
             // Initialize CloudRedirect host (loads DLL if enabled in settings)
             CloudRedirectHost::Initialize(SteamInstallPath);
-            SignalHooksInstalled();
+
             HookStatus::SetStartupPhase("hooks_complete");
             HookStatus::WriteToDisk();
             LOG_COREIN_INFO("\"stage\" \"Bootstrap\" \"act\" \"complete\"");
-            LoaderGate::SignalBootstrapReady();
+
+            // ── STAGE 2 COMPLETE: Open UI gate ───────────────────────
+            LoaderGate::SignalUiReady();
             return 0;
         }
 
