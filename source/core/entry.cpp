@@ -443,6 +443,14 @@ namespace CoreInit {
             DenuvoAuth::Init();
             BetterLuma::Attach();
 
+            // Join Lua background parsing & inject startup package
+            // Must complete before opening the client gate so all depot/ownership
+            // collections and package injections are 100% frozen and ready before
+            // Steam can unblock and invoke hooked methods (HasDepot, IsOwned, etc.).
+            luaFuture.get();
+            SteamCapture::TryStartupPackageInjection("lua-loaded");
+            DirWatch::Start(watchDirs);
+
             // ── STAGE 1 COMPLETE: Open client gate ───────────────────
             // Steam's loader thread unblocks immediately, returning the diverted
             // steamclient module handle and allowing Steam symbol resolution to proceed.
@@ -481,11 +489,6 @@ namespace CoreInit {
             // ── SteamUI::CoreHook() must be installed to catch LoadModuleWithPath ──
             HookStatus::SetStartupPhase("installing_hooks");
             SteamUI::CoreHook();
-
-            // ── Wait for Lua background parsing to complete ──────────
-            luaFuture.get();
-            SteamCapture::TryStartupPackageInjection("lua-loaded");
-            DirWatch::Start(watchDirs);
 
             // Initialize CloudRedirect host (loads DLL if enabled in settings)
             CloudRedirectHost::Initialize(SteamInstallPath);
