@@ -26,8 +26,6 @@
 
 namespace {
     using namespace std::chrono_literals;
-    constexpr int  MAX_RETRY      = 20;
-    constexpr auto RETRY_INTERVAL = 300ms;
 
     //  STEAMUI  function type aliases
     using AddProtobufAsBinary_t = void*(__fastcall*)(void* /*args*/, void* /*proto*/);
@@ -100,9 +98,8 @@ namespace {
         // when the loader had not mapped steamui.dll at InitThread dispatch.
         DispatchSteamUiPatternFetch();
         // Wait for steamclient hooks to be installed before redirecting.
-        for (int idx = 0; idx < MAX_RETRY && !g_HooksInstalled.load(); ++idx) {
-            LOG_STEAMUICH_DEBUG("LoadModuleWithPath: waiting for hooks... (attempt {}/{})", idx + 1, MAX_RETRY);
-            std::this_thread::sleep_for(RETRY_INTERVAL);
+        if (!WaitForHooksInstalled(6000)) {
+            LOG_STEAMUICH_WARN("LoadModuleWithPath: timed out waiting for hooks after 6000ms");
         }
         auto lmwpStart = std::chrono::steady_clock::now();
         HMODULE h = oLoadModuleWithPath(path, flags);

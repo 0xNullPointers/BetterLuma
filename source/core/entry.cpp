@@ -360,7 +360,7 @@ namespace CoreInit {
             BetterLuma::Attach();
             // Initialize CloudRedirect host (loads DLL if enabled in settings)
             CloudRedirectHost::Initialize(SteamInstallPath);
-            g_HooksInstalled.store(true);
+            SignalHooksInstalled();
             HookStatus::SetStartupPhase("hooks_complete");
             HookStatus::WriteToDisk();
             LOG_COREIN_INFO("\"stage\" \"Bootstrap\" \"act\" \"complete\"");
@@ -372,6 +372,26 @@ namespace CoreInit {
 
 } // namespace CoreInit
 
+static HANDLE g_hHooksInstalledEvent = nullptr;
+
+void SignalHooksInstalled() {
+    g_HooksInstalled.store(true, std::memory_order_release);
+    if (g_hHooksInstalledEvent) {
+        SetEvent(g_hHooksInstalledEvent);
+    }
+}
+
+bool WaitForHooksInstalled(DWORD timeoutMs) {
+    if (g_HooksInstalled.load(std::memory_order_acquire)) {
+        return true;
+    }
+    if (!g_hHooksInstalledEvent) {
+        return false;
+    }
+    DWORD res = WaitForSingleObject(g_hHooksInstalledEvent, timeoutMs);
+    return (res == WAIT_OBJECT_0) || g_HooksInstalled.load(std::memory_order_acquire);
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 //  DllMain
 // ═══════════════════════════════════════════════════════════════════════
@@ -381,6 +401,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     if (dwReason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(hModule);
+        g_hHooksInstalledEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
         // Pin the module so a stray FreeLibrary cannot unmap BetterLuma while
         // hooks and worker threads are still live. Failure is non-fatal; we
         // just lose the unmap protection and continue attach.
@@ -405,10 +426,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     else if (dwReason == DLL_PROCESS_DETACH)
     {
         LoaderGate::Uninstall();
+        if (g_hHooksInstalledEvent) {
+            SetEvent(g_hHooksInstalledEvent);
+        }
         if (g_InitThread) {
             WaitForSingleObject(g_InitThread, 5000);
             CloseHandle(g_InitThread);
             g_InitThread = nullptr;
+        }
+        if (g_hHooksInstalledEvent) {
+            CloseHandle(g_hHooksInstalledEvent);
+            g_hHooksInstalledEvent = nullptr;
         }
         if (g_HooksInstalled.load()) {
             DirWatch::Stop();

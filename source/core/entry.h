@@ -37,9 +37,16 @@ inline HMODULE diversion_hModule = nullptr;
 inline HANDLE g_InitThread = nullptr;
 
 // Set to true by InitThread after every hook has been installed.
-// SteamUI.cpp's LoadModuleWithPath hook polls this before returning diversion_hModule
+// SteamUI.cpp's LoadModuleWithPath hook synchronizes on this before returning diversion_hModule
 // to the caller, so all hooks are in place before Steam starts using the module.
 inline std::atomic<bool> g_HooksInstalled{false};
+
+// Signals that all hooks have been installed across all subsystems.
+void SignalHooksInstalled();
+
+// Waits for hooks to be installed, with a timeout in milliseconds.
+// Returns true if hooks are ready, false on timeout or failure.
+bool WaitForHooksInstalled(DWORD timeoutMs = 6000);
 
 // Runtime paths filled in by LoadDiversion() from the process working directory.
 inline char SteamInstallPath[MAX_PATH] = {};  // Steam root: the folder containing steam.exe

@@ -24,6 +24,7 @@ namespace {
     using CUtlMemoryGrow_t = void* (*)(CUtlVector<AppId_t>* pVec, int grow_size);
     CUtlMemoryGrow_t oCUtlMemoryGrow = nullptr;
     std::mutex g_stubWarnLock;
+    std::mutex g_package0Lock;
     std::unordered_set<AppId_t> g_stubWarnedApps;
     std::unordered_set<AppId_t> g_ownershipPatchLoggedApps;
     std::atomic<bool> g_package0Seeded{false};
@@ -40,8 +41,9 @@ namespace {
 
     bool PackageVectorContains(PackageInfo* pPkg, AppId_t appId) {
         if (!pPkg || !pPkg->AppIdVec.m_Memory.m_pMemory) return false;
-        AppId_t* data = pPkg->AppIdVec.m_Memory.m_pMemory;
-        for (uint32_t i = 0; i < pPkg->AppIdVec.m_Size; ++i) {
+        const AppId_t* data = pPkg->AppIdVec.m_Memory.m_pMemory;
+        const uint32_t size = pPkg->AppIdVec.m_Size;
+        for (uint32_t i = 0; i < size; ++i) {
             if (data[i] == appId) return true;
         }
         return false;
@@ -51,44 +53,62 @@ namespace {
                                                    const std::vector<AppId_t>& appIds,
                                                    const char* reason) {
         PackageContainmentResult out{};
-        out.total = pPkg ? pPkg->AppIdVec.m_Size : 0;
         const char* safeReason = reason ? reason : "package0";
 
+        // Filter and collect unique, non-zero target AppIds
         std::unordered_set<AppId_t> seen;
-        std::vector<AppId_t> missingIds;
+        std::vector<AppId_t> uniqueTargetIds;
         seen.reserve(appIds.size());
-        missingIds.reserve(appIds.size());
-
+        uniqueTargetIds.reserve(appIds.size());
         for (AppId_t id : appIds) {
-            if (!id || !seen.insert(id).second) continue;
-            ++out.expected;
-            if (PackageVectorContains(pPkg, id)) {
-                ++out.present;
-            } else {
-                missingIds.push_back(id);
+            if (id && seen.insert(id).second) {
+                uniqueTargetIds.push_back(id);
             }
         }
+        out.expected = uniqueTargetIds.size();
 
         if (!pPkg) {
-            out.missing = missingIds.size();
-            LOG_PACKAGE_WARN("Package0Containment: reason={} package0=null expected={} present={} missing={} appended=0 status=-1",
-                             safeReason, out.expected, out.present, out.missing);
-            HookStatus::RecordPackageContainment(-1, 0, out.expected, out.present,
+            out.missing = out.expected;
+            LOG_PACKAGE_WARN("Package0Containment: reason={} package0=null expected={} present=0 missing={} appended=0 status=-1",
+                             safeReason, out.expected, out.missing);
+            HookStatus::RecordPackageContainment(-1, 0, out.expected, 0,
                                                  out.missing, 0, safeReason);
             return out;
         }
 
+        std::lock_guard<std::mutex> lock(g_package0Lock);
+        out.total = pPkg->AppIdVec.m_Size;
+
         if (pPkg->Status != EPackageStatus::Available) {
-            out.missing = missingIds.size();
+            out.missing = out.expected;
             LOG_PACKAGE_WARN(
-                "Package0Containment: reason={} status={} expected={} present={} missing={} appended=0 total={} not-available",
+                "Package0Containment: reason={} status={} expected={} present=0 missing={} appended=0 total={} not-available",
                 safeReason, static_cast<int>(pPkg->Status), out.expected,
-                out.present, out.missing, pPkg->AppIdVec.m_Size);
+                out.missing, pPkg->AppIdVec.m_Size);
             HookStatus::RecordPackageContainment(static_cast<int32_t>(pPkg->Status),
                                                  pPkg->AppIdVec.m_Size, out.expected,
-                                                 out.present, out.missing, 0,
+                                                 0, out.missing, 0,
                                                  safeReason);
             return out;
+        }
+
+        // Build O(1) lookup set for existing entries in Package 0 once
+        std::unordered_set<AppId_t> existing;
+        const AppId_t* data = pPkg->AppIdVec.m_Memory.m_pMemory;
+        const uint32_t size = pPkg->AppIdVec.m_Size;
+        if (data && size > 0) {
+            existing.reserve(size);
+            existing.insert(data, data + size);
+        }
+
+        std::vector<AppId_t> missingIds;
+        missingIds.reserve(uniqueTargetIds.size());
+        for (AppId_t id : uniqueTargetIds) {
+            if (existing.find(id) != existing.end()) {
+                ++out.present;
+            } else {
+                missingIds.push_back(id);
+            }
         }
 
         if (!missingIds.empty()) {
@@ -118,7 +138,7 @@ namespace {
         }
 
         out.missing = missingIds.size() - out.appended;
-        out.ok = out.missing == 0;
+        out.ok = (out.missing == 0);
         g_package0Seeded.store(out.ok, std::memory_order_release);
         LOG_PACKAGE_INFO(
             "Package0Containment: reason={} status={} expected={} present={} missing={} appended={} total={}",
