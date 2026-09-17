@@ -98,7 +98,7 @@ bool LoadDiversion()
     sprintf_s(SteamclientPath, MAX_PATH, "%s\\steamclient64.dll",   SteamInstallPath);
     sprintf_s(DiversionPath,   MAX_PATH, "%s\\bin\\lcoverlay.dll",  SteamInstallPath);
     sprintf_s(LuaDir,          MAX_PATH, "%s\\config\\stplug-in", SteamInstallPath);
-    sprintf_s(ConfigPath,      MAX_PATH, "%s\\lumacore.toml",      SteamInstallPath);
+    sprintf_s(ConfigPath,      MAX_PATH, "%s\\BetterLuma.toml",    SteamInstallPath);
     // ensure bin\ directory exists before copying
     char binDir[MAX_PATH];
     sprintf_s(binDir, MAX_PATH, "%s\\bin", SteamInstallPath);
@@ -126,7 +126,7 @@ bool LoadDiversion()
             Sleep(100);
         }
     }
-    LOG_INFO("LumaCore: loaded lcoverlay.dll from {}", DiversionPath);
+    LOG_INFO("BetterLuma: loaded lcoverlay.dll from {}", DiversionPath);
     return true;
 }
 
@@ -161,27 +161,27 @@ static void DetectSteamBuildId() {
 // Pattern fetch policy: each LC_ATTACH below resolves through PatternFetcher::Get,
 // which means the per-module entry map MUST be populated before the install pass
 // runs. PatternFetcher::LoadFor does cache-first read, falls back to network on
-// cache miss, writes the body to <Steam>\lumacore\pattern\<sha>.toml on success,
+// cache miss, writes the body to <Steam>\betterluma\pattern\<sha>.toml on success,
 // and installs the parsed entries - all synchronously. We block InitThread on
 // it so the very first session after a fresh install actually picks up the TOML
 // and lands all hooks instead of racing the install pass against a detached
 // network worker. The Steam loader thread is not waiting on us; only the
-// LumaCore init worker.
+// BetterLuma init worker.
 static DWORD WINAPI InitThread(LPVOID param) {
     HMODULE selfModule = static_cast<HMODULE>(param);
     Logger::Init(selfModule);
-    LOG_INFO("LumaCore init thread started (build " __DATE__ " " __TIME__ ")");
+    LOG_INFO("BetterLuma init thread started (build " __DATE__ " " __TIME__ ")");
 
     // Build id first so HookStatus has a value to surface even if the
     // diversion copy below fails. A bare status.json with the build id is
-    // still useful to SteaMidra's banner.
+    // still useful to surface in status.json.
     DetectSteamBuildId();
     HookStatus::SetBuildId(g_steamBuildId);
 
     if (!LoadDiversion()) {
         LOG_ERROR("LoadDiversion failed");
-        // Surface the absence so the banner explains itself instead of
-        // silently going stale. SteaMidra reads the file each tick.
+        // Surface the absence so the status explains itself instead of
+        // silently going stale.
         HookStatus::SetTomlAvailability("steamclient", false);
         HookStatus::SetTomlAvailability("steamui", false);
         HookStatus::WriteToDisk();
@@ -258,7 +258,7 @@ static DWORD WINAPI InitThread(LPVOID param) {
     LumaCore::Attach();
     g_HooksInstalled.store(true);
     HookStatus::WriteToDisk();
-    LOG_INFO("LumaCore init complete");
+    LOG_INFO("BetterLuma init complete");
     return 0;
 }
 

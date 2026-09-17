@@ -5,7 +5,7 @@ set "SOURCE_DIR=%~dp0source"
 set "BUILD_DIR=%~dp0build"
 set "OUT_DIR=%~dp0Releases"
 set "LOG_FILE=%~dp0build_log.txt"
-> "%LOG_FILE%" echo LumaCore build started %DATE% %TIME%
+> "%LOG_FILE%" echo BetterLuma build started %DATE% %TIME%
 
 :: --- Argument parsing ----------------------------------------------------
 :: --no-pause      skip the trailing 'pause'
@@ -29,7 +29,7 @@ goto parse_args
 
 echo.
 echo ============================================================
-echo  LumaCore Build
+echo  BetterLuma Build
 echo  Source  : %SOURCE_DIR%
 echo  Build   : %BUILD_DIR%
 echo  Output  : %OUT_DIR%
@@ -48,7 +48,7 @@ if "%DO_CLEAN%"=="1" (
         if exist "%BUILD_DIR%\NUL" (
             echo [WARN] First clean attempt failed, using PowerShell fallback...
             >> "%LOG_FILE%" echo [WARN] First clean attempt failed, using PowerShell fallback...
-            powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=[IO.Path]::GetFullPath('%BUILD_DIR%'); $root=[IO.Path]::GetFullPath('%~dp0'); if(-not $p.StartsWith($root,[StringComparison]::OrdinalIgnoreCase)){throw 'Refusing to delete outside LumaCore folder'}; for($i=1; $i -le 5 -and (Test-Path -LiteralPath $p); $i++){ try { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop } catch { Write-Host ('delete attempt '+$i+' failed: '+$_.Exception.Message); Start-Sleep -Milliseconds 500 } }; if(Test-Path -LiteralPath $p){ exit 1 }" >> "%LOG_FILE%" 2>&1
+            powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=[IO.Path]::GetFullPath('%BUILD_DIR%'); $root=[IO.Path]::GetFullPath('%~dp0'); if(-not $p.StartsWith($root,[StringComparison]::OrdinalIgnoreCase)){throw 'Refusing to delete outside BetterLuma folder'}; for($i=1; $i -le 5 -and (Test-Path -LiteralPath $p); $i++){ try { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop } catch { Write-Host ('delete attempt '+$i+' failed: '+$_.Exception.Message); Start-Sleep -Milliseconds 500 } }; if(Test-Path -LiteralPath $p){ exit 1 }" >> "%LOG_FILE%" 2>&1
             if exist "%BUILD_DIR%\NUL" (
                 echo [ERROR] Failed to delete %BUILD_DIR% [file in use]
                 echo [ERROR] See %LOG_FILE% for details.
@@ -151,6 +151,7 @@ if "%BUILD_RELEASE%"=="1" (
     if exist "%BUILD_DIR%\Release\BetterLuma.dll" (
         mkdir "%OUT_DIR%\Release" 2>nul
         del /F /Q "%OUT_DIR%\Release\LumaCore.dll" 2>nul
+        del /F /Q "%OUT_DIR%\Release\LumaCorePayload.dll" 2>nul
         copy /Y "%BUILD_DIR%\Release\BetterLuma.dll" "%OUT_DIR%\Release\" >nul
         if exist "%BUILD_DIR%\Release\dwmapi.dll" (
             copy /Y "%BUILD_DIR%\Release\dwmapi.dll" "%OUT_DIR%\Release\" >nul
@@ -158,8 +159,8 @@ if "%BUILD_RELEASE%"=="1" (
         if exist "%BUILD_DIR%\Release\xinput1_4.dll" (
             copy /Y "%BUILD_DIR%\Release\xinput1_4.dll" "%OUT_DIR%\Release\" >nul
         )
-        if exist "%BUILD_DIR%\Release\LumaCorePayload.dll" (
-            copy /Y "%BUILD_DIR%\Release\LumaCorePayload.dll" "%OUT_DIR%\Release\" >nul
+        if exist "%BUILD_DIR%\Release\BetterLumaPayload.dll" (
+            copy /Y "%BUILD_DIR%\Release\BetterLumaPayload.dll" "%OUT_DIR%\Release\" >nul
         )
         echo [OK] Release DLLs copied to %OUT_DIR%\Release
     ) else (
@@ -171,6 +172,7 @@ if "%BUILD_DEBUG%"=="1" (
     if exist "%BUILD_DIR%\Debug\BetterLuma.dll" (
         mkdir "%OUT_DIR%\Debug" 2>nul
         del /F /Q "%OUT_DIR%\Debug\LumaCore.dll" 2>nul
+        del /F /Q "%OUT_DIR%\Debug\LumaCorePayload.dll" 2>nul
         copy /Y "%BUILD_DIR%\Debug\BetterLuma.dll" "%OUT_DIR%\Debug\" >nul
         if exist "%BUILD_DIR%\Debug\dwmapi.dll" (
             copy /Y "%BUILD_DIR%\Debug\dwmapi.dll" "%OUT_DIR%\Debug\" >nul
@@ -178,8 +180,8 @@ if "%BUILD_DEBUG%"=="1" (
         if exist "%BUILD_DIR%\Debug\xinput1_4.dll" (
             copy /Y "%BUILD_DIR%\Debug\xinput1_4.dll" "%OUT_DIR%\Debug\" >nul
         )
-        if exist "%BUILD_DIR%\Debug\LumaCorePayload.dll" (
-            copy /Y "%BUILD_DIR%\Debug\LumaCorePayload.dll" "%OUT_DIR%\Debug\" >nul
+        if exist "%BUILD_DIR%\Debug\BetterLumaPayload.dll" (
+            copy /Y "%BUILD_DIR%\Debug\BetterLumaPayload.dll" "%OUT_DIR%\Debug\" >nul
         )
         echo [OK] Debug DLLs copied to %OUT_DIR%\Debug
     ) else (

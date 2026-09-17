@@ -243,7 +243,7 @@ namespace PatternFetcher {
             ParsedUrl parsed{};
             if (!ParseUrl(url, parsed)) { r.netError = true; r.note = "bad url"; return r; }
 
-            HINTERNET hSession = WinHttpOpen(L"LumaCore-PatternFetcher/1.0",
+            HINTERNET hSession = WinHttpOpen(L"BetterLuma-PatternFetcher/1.0",
                                              WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
             if (!hSession) { r.netError = true; r.note = "WinHttpOpen failed"; return r; }
@@ -410,11 +410,11 @@ namespace PatternFetcher {
 
         std::filesystem::path CacheDir() {
             // SteamInstallPath is the Steam root (folder containing steam.exe).
-            // Per requirement 2.3 the cache is flat: <Steam>\lumacore\pattern\
+            // Per requirement 2.3 the cache is flat: <Steam>\betterluma\pattern\
             // <sha>.toml. The SHA is unique per module on disk so the steamui
             // and steamclient toml never collide on the same Steam build.
             std::filesystem::path root = SteamInstallPath;
-            return root / "lumacore" / "pattern";
+            return root / "betterluma" / "pattern";
         }
 
         std::filesystem::path CachePath(const std::string& sha) {
@@ -791,7 +791,7 @@ namespace PatternFetcher {
             errOut.clear();
 
             if (Settings::patternMirror.empty()) {
-                errOut = "no mirror configured in lumacore.toml";
+                errOut = "no mirror configured in BetterLuma.toml";
                 return false;
             }
 

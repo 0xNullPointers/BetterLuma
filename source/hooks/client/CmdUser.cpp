@@ -188,7 +188,7 @@ namespace CmdUser::SteamID {
                         snap->imageName.empty() ? "-" : snap->imageName);
     }
 
-    // ▌ IPC-USER ▌ Handler: IClientUser::GetSteamID
+    //  IPC-USER  Handler: IClientUser::GetSteamID
     //  Request:  no args
     //  Response: [uint8 prefix=0x0B][uint64 SteamID]   (9 bytes)
     void OnGetSteamID(CSteamPipeClient* pipe, CUtlBuffer*, CUtlBuffer* pWrite)
@@ -264,7 +264,7 @@ namespace CmdUser::Tickets {
         return 0;
     }
 
-    // ▌ IPC-USER ▌ Handler: IClientUser::GetAppOwnershipTicketExtendedData
+    //  IPC-USER  Handler: IClientUser::GetAppOwnershipTicketExtendedData
     void OnGetOwnershipTicketExtended(CSteamPipeClient* pipe, CUtlBuffer* pRead, CUtlBuffer* pWrite)
     {
         const uint8_t* reqData = pRead->Base();
@@ -339,7 +339,7 @@ namespace CmdUser::Tickets {
                   piSignature, pcbSignature, appId);
     }
 
-    // ▌ IPC-USER ▌ Handler: IClientUser::RequestEncryptedAppTicket
+    //  IPC-USER  Handler: IClientUser::RequestEncryptedAppTicket
     void OnRequestEncrypted(CSteamPipeClient* pipe, CUtlBuffer*, CUtlBuffer* pWrite)
     {
         AppId_t appId = PipeWatch::ResolveAppId(pipe);
@@ -363,7 +363,7 @@ namespace CmdUser::Tickets {
         LOG_USRCMD_INFO("\"handler\" \"RequestEncryptedAppTicket\" \"appId\" {} \"hCall\" \"0x{:016X}\"", appId, hAsyncCall);
     }
 
-    // ▌ IPC-USER ▌ Handler: IClientUser::GetEncryptedAppTicket
+    //  IPC-USER  Handler: IClientUser::GetEncryptedAppTicket
     void OnGetEncrypted(CSteamPipeClient* pipe, CUtlBuffer*, CUtlBuffer* pWrite)
     {
         AppId_t appId = PipeWatch::ResolveAppId(pipe);
@@ -395,7 +395,7 @@ namespace CmdUser::Tickets {
 
 namespace CmdUser::Utils {
 
-    // ▌ IPC-UTILS ▌ Handler: IClientUtils::GetAppID
+    //  IPC-UTILS  Handler: IClientUtils::GetAppID
     //  The game needs the real appid here. SteamStub auto hides from Steam in
     //  the launch tracking path, not in this game-facing reply.
     void OnGetAppID(CSteamPipeClient* pipe, CUtlBuffer*, CUtlBuffer* pWrite)
@@ -515,7 +515,7 @@ namespace CmdUser::Utils {
         { GlobalStatsReceived_t::k_iCallback,                OnGlobalStatsReceived },
     };
 
-    // ▌ IPC-UTILS ▌ Handler: IClientUtils::GetAPICallResult
+    //  IPC-UTILS  Handler: IClientUtils::GetAPICallResult
     void OnGetAPICallResult(
         CSteamPipeClient* pipe, CUtlBuffer* pRead, CUtlBuffer* pWrite)
     {

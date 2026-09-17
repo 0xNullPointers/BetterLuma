@@ -79,7 +79,7 @@ namespace BootDiag {
         void PopupThread() {
             char msg[4096];
             std::snprintf(msg, sizeof(msg),
-                "LumaCore: IPC specs unavailable\n\n"
+                "BetterLuma: IPC specs unavailable\n\n"
                 "Steam build ID: %s\n"
                 "Steamclient:    %s\n\n"
                 "This Steam version may not be supported yet. "
@@ -88,7 +88,7 @@ namespace BootDiag {
                 g_capturedBuildId.empty() ? "unknown" : g_capturedBuildId.c_str(),
                 g_capturedSha.empty()     ? "unknown" : g_capturedSha.c_str());
 
-            MessageBoxA(nullptr, msg, "LumaCore -- Steam Diagnostics",
+            MessageBoxA(nullptr, msg, "BetterLuma -- Steam Diagnostics",
                         MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
         }
 

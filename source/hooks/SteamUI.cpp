@@ -23,12 +23,12 @@ namespace {
     constexpr int  MAX_RETRY      = 20;
     constexpr auto RETRY_INTERVAL = 300ms;
 
-    // ▌ STEAMUI ▌ function type aliases
+    //  STEAMUI  function type aliases
     using AddProtobufAsBinary_t = void*(__fastcall*)(void* /*args*/, void* /*proto*/);
     using GetAppByID_t          = void*(__fastcall*)(void* /*controller*/, AppId_t, bool /*create*/);
     using GetTopManager_t       = void*(__fastcall*)();
 
-    // ▌ STEAMUI ▌ resolved function pointers
+    //  STEAMUI  resolved function pointers
     inline AddProtobufAsBinary_t oAddProtobufAsBinary = nullptr;
     inline GetAppByID_t          oGetAppByID          = nullptr;
     inline GetTopManager_t       oGetTopManager       = nullptr;
@@ -56,7 +56,7 @@ namespace {
         { "AddProtobufAsBinary", "CJSMethodArgs::AddProtobufAsBinary" },
     };
 
-    // ▌ STEAMUI ▌ LoadModuleWithPath hook
+    //  STEAMUI  LoadModuleWithPath hook
     LC_HOOK_DEF(LoadModuleWithPath, HMODULE, const char* path, bool flags) {
         LOG_STEAMUICH_INFO("LoadModuleWithPath called with path: {} , flags: {}", path, flags);
         // First steamui-mapped callback also primes the pattern fetcher worker
@@ -73,7 +73,7 @@ namespace {
         return h;
     }
 
-    // ▌ STEAMUI ▌ GetTopManager
+    //  STEAMUI  GetTopManager
     // The pattern publisher schema points GetTopManager directly at the
     // 2-instruction getter (mov rax, [rip+disp]; ret), so the resolved
     // address IS the function pointer. No anchor decode, no rel32 walk.

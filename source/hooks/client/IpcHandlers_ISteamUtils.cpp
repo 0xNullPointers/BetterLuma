@@ -16,7 +16,7 @@ namespace {
 
     using namespace SteamCapture;
 
-    // ▌▌ IClientUtils::GetAppID
+    //  IClientUtils::GetAppID
     //  Manual online-fix and SteamStub auto report the real app to the game.
     //  SteamStub still keeps Steam-facing process tracking on 480 elsewhere.
     //  pRead: unused (no args).
@@ -67,7 +67,7 @@ namespace {
                         pipeId, pid, reported, real, finalAppId, changed);
     }
 
-    // ▌▌ IClientUtils::GetAPICallResult
+    //  IClientUtils::GetAPICallResult
     //  Intercepts API call results so we can patch the responses for ticket-
     //  related calls (EncryptedAppTicket, AppOwnershipTicket). When the
     //  original call yielded a non-OK eresult for a Lua-tracked app we patch

@@ -9,7 +9,7 @@ It ships as four files placed in the Steam installation directory:
 - `dwmapi.dll` - thin DWM proxy that Steam loads on startup; immediately loads `BetterLuma.dll`
 - `xinput1_4.dll` - thin XInput 1.4 proxy; backup load gate for `BetterLuma.dll`
 - `BetterLuma.dll` - the main hook library and patch orchestration engine
-- `LumaCorePayload.dll` - injected directly into game processes for OnlineFix multiplayer (EOS bridge and lobby redirection)
+- `BetterLumaPayload.dll` - injected directly into game processes for OnlineFix multiplayer (EOS bridge and lobby redirection)
 
 ## How it works
 
@@ -20,9 +20,9 @@ At Steam startup, the proxy DLLs load before any game code and load `BetterLuma.
 3. Fetches per-build pattern TOMLs from the network mirror chain, caches them locally, and primes the runtime pattern map.
 4. Installs over 40 Detours hooks plus Vectored Exception Handler (VEH) captures into the loaded `lcoverlay.dll` copy, covering IPC dispatch, package ownership, license patching, Denuvo auth, manifest binding, network packet rewriting, and OnlineFix game language synchronization.
 5. Starts a Lua directory watcher that monitors `config/stplug-in/` for `.lua` files.
-6. For OnlineFix titles, injects `LumaCorePayload.dll` into game processes via `CreateProcess` hooks to maintain the Epic Online Services (EOS) bridge and handle Spacewar (480) multiplayer redirection.
+6. For OnlineFix titles, injects `BetterLumaPayload.dll` into game processes via `CreateProcess` hooks to maintain the Epic Online Services (EOS) bridge and handle Spacewar (480) multiplayer redirection.
 
-When a Lua file appears or changes, BetterLumaCore parses it, loads depot decryption keys and ownership records, and injects the new ownership data into Steam without restarting. For OnlineFix games, BetterLumaCore synchronizes the game's language setting to Spacewar (480) and `LumaCorePayload.dll` is injected into the game process via `CreateProcess` hooks to handle EOS bridge and lobby redirection.
+When a Lua file appears or changes, BetterLumaCore parses it, loads depot decryption keys and ownership records, and injects the new ownership data into Steam without restarting. For OnlineFix games, BetterLumaCore synchronizes the game's language setting to Spacewar (480) and `BetterLumaPayload.dll` is injected into the game process via `CreateProcess` hooks to handle EOS bridge and lobby redirection.
 
 ## Features
 

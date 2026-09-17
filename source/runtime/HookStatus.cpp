@@ -199,10 +199,10 @@ namespace HookStatus {
             out += "  \"build_id\": \"";
             out += JsonEscape(g_buildId);
             out += "\",\n";
-            out += "  \"lumacore_build_stamp\": \"";
+            out += "  \"betterluma_build_stamp\": \"";
             out += JsonEscape(BuildInfo::BuildStamp());
             out += "\",\n";
-            out += "  \"lumacore_version\": \"";
+            out += "  \"betterluma_version\": \"";
             out += JsonEscape(BuildInfo::Version());
             out += "\",\n";
             out += "  \"build_config\": \"";
@@ -610,7 +610,7 @@ namespace HookStatus {
                 LOG_WARN("HookStatus: SteamInstallPath unset, skipping write");
                 return false;
             }
-            std::filesystem::path dir = std::filesystem::path(SteamInstallPath) / "lumacore";
+            std::filesystem::path dir = std::filesystem::path(SteamInstallPath) / "betterluma";
             std::error_code ec;
             std::filesystem::create_directories(dir, ec);
             if (ec) {

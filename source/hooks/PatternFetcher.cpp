@@ -50,7 +50,7 @@ namespace PatternFetcher {
         constexpr const char* kPrimaryPathPrefix = "/KoriaPolis/Steam-Auto-PT/pattern/";
         constexpr const char* kCdnPathPrefix     = "/gh/KoriaPolis/Steam-Auto-PT@pattern/";
 
-        // gitflic mirror lives at midrags/steam-auto-pt on the pattern branch.
+        // gitflic mirror lives on the pattern branch.
         // Per-file raw fetches are gated behind login on gitflic, so we go
         // through the public blob-info JSON API instead. The reply carries
         // the file body in a "blobLines" array - each line is one element
@@ -60,7 +60,7 @@ namespace PatternFetcher {
         // No auth needed for public projects, ddos-guard cookies handled
         // automatically by WinHTTP because we don't keep a session.
         constexpr const char* kGitflicHost = "gitflic.ru";
-        constexpr const char* kGitflicApiPrefix = "/api/project/midrags/steam-auto-pt/blob?branch=pattern&file=";
+        constexpr const char* kGitflicApiPrefix = "/api/project/betterluma/steam-auto-pt/blob?branch=pattern&file=";
 
         // entries[subdir][name] -> Entry. The subdir key is a stable string view
         // into a small pool of "steamclient" / "steamui" literals, so we can
@@ -257,7 +257,7 @@ namespace PatternFetcher {
             ParsedUrl parsed{};
             if (!ParseUrl(url, parsed)) { r.netError = true; r.note = "bad url"; return r; }
 
-            HINTERNET hSession = WinHttpOpen(L"LumaCore-PatternFetcher/1.0",
+            HINTERNET hSession = WinHttpOpen(L"BetterLuma-PatternFetcher/1.0",
                                              WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
             if (!hSession) { r.netError = true; r.note = "WinHttpOpen failed"; return r; }
@@ -424,11 +424,11 @@ namespace PatternFetcher {
 
         std::filesystem::path CacheDir() {
             // SteamInstallPath is the Steam root (folder containing steam.exe).
-            // Per requirement 2.3 the cache is flat: <Steam>\lumacore\pattern\
+            // Per requirement 2.3 the cache is flat: <Steam>\betterluma\pattern\
             // <sha>.toml. The SHA is unique per module on disk so the steamui
             // and steamclient toml never collide on the same Steam build.
             std::filesystem::path root = SteamInstallPath;
-            return root / "lumacore" / "pattern";
+            return root / "betterluma" / "pattern";
         }
 
         std::filesystem::path CachePath(const std::string& sha) {

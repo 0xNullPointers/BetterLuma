@@ -261,7 +261,7 @@ namespace {
                 // unsigned blob if nothing is cached. For Steam-DRM (Steam
                 // Stub) v2.2+ titles like Teardown the unsigned blob still
                 // fails the wrapper signature check - the fix there is
-                // Steamless from SteaMidra. For older v1.5 / early-v2
+                // Steamless. For older v1.5 / early-v2
                 // wrappers and tools that only read the SteamID/AppID
                 // fields this is enough on its own.
                 if (hasDepot) {

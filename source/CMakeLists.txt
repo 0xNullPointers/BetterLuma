@@ -189,7 +189,7 @@ add_library(LumaCorePayload SHARED
     payload/LumaCorePayload/EpicOnlineBridge.cpp
     payload/LumaCorePayload/PayloadPropagator.cpp
 )
-set_target_properties(LumaCorePayload PROPERTIES PREFIX "" OUTPUT_NAME "LumaCorePayload")
+set_target_properties(LumaCorePayload PROPERTIES PREFIX "" OUTPUT_NAME "BetterLumaPayload")
 target_include_directories(LumaCorePayload PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/payload/LumaCorePayload

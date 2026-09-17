@@ -96,7 +96,7 @@ Response Get(std::string_view url) {
         return r;
     }
 
-    WinHandle session(WinHttpOpen(L"LumaCore-RuntimeHttp/1.0",
+    WinHandle session(WinHttpOpen(L"BetterLuma-RuntimeHttp/1.0",
                                   WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                   WINHTTP_NO_PROXY_NAME,
                                   WINHTTP_NO_PROXY_BYPASS, 0));

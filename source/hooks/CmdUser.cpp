@@ -13,10 +13,10 @@
 #pragma comment(lib, "shlwapi.lib")
 
 namespace {
-    // ▌ IPC-USER ▌ eticket: hAsyncCall to appId mapping
+    //  IPC-USER  eticket: hAsyncCall to appId mapping
     std::unordered_map<uint64, AppId_t> g_PendingEtickets;
 
-    // ▌ IPC-USER ▌ Dynamic SteamID fallback
+    //  IPC-USER  Dynamic SteamID fallback
     // Walks Steam's userdata directory looking for a folder named after
     // an account ID that contains a sub-folder for appId.  This covers
     // the case where no AppTicket is cached in the registry but the user
@@ -65,7 +65,7 @@ namespace {
         return outcome;
     }
 
-    // ▌ IPC-USER ▌ Handler: IClientUser::GetSteamID
+    //  IPC-USER  Handler: IClientUser::GetSteamID
     //  Request:  no args
     //  Response: [uint8 prefix=0x0B][uint64 SteamID]   (9 bytes)
     void Cmd_IClientUser_GetSteamID(CSteamPipeClient* pipe,
@@ -89,7 +89,7 @@ namespace {
         LOG_IPCCH_INFO("IClientUser::GetSteamID: AppId={} -> Spoofed: 0x{:X}({})", appId, spoofed, spoofed);
     }
 
-    // ▌ IPC-USER ▌ Handler: IClientUser::GetAppOwnershipTicketExtendedData
+    //  IPC-USER  Handler: IClientUser::GetAppOwnershipTicketExtendedData
     void Cmd_IClientUser_GetAppOwnershipTicketExtendedData(
         CSteamPipeClient* pipe, CUtlBuffer* pRead, CUtlBuffer* pWrite)
     {
@@ -150,7 +150,7 @@ namespace {
                   "(sigOffset={}) WROTE REPLY", appId, ticketSize, sigOffset);
     }
 
-    // ▌ IPC-USER ▌ Handler: IClientUser::RequestEncryptedAppTicket
+    //  IPC-USER  Handler: IClientUser::RequestEncryptedAppTicket
     void Cmd_IClientUser_RequestEncryptedAppTicket(
         CSteamPipeClient* pipe, CUtlBuffer*, CUtlBuffer* pWrite)
     {
@@ -175,7 +175,7 @@ namespace {
         LOG_IPCCH_INFO("RequestEncryptedAppTicket: AppId={} hAsyncCall=0x{:016X} RECORDED", appId, hAsyncCall);
     }
 
-    // ▌ IPC-USER ▌ Handler: IClientUser::GetEncryptedAppTicket
+    //  IPC-USER  Handler: IClientUser::GetEncryptedAppTicket
     void Cmd_IClientUser_GetEncryptedAppTicket(
         CSteamPipeClient* pipe, CUtlBuffer*, CUtlBuffer* pWrite)
     {

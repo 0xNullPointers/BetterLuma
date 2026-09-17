@@ -21,8 +21,8 @@ namespace {
         return oGetPipeClient ? oGetPipeClient(pServer, hSteamPipe) : nullptr;
     }
 
-    // ▌▌ LumaCore ▌ IPC ▌ Handler registry
-    // ▌▌
+    //  LumaCore  IPC  Handler registry
+    // 
     using namespace IPCBus;
 
     static constexpr uint64 MakeHandlerKey(EIPCInterface iface, uint32 funcHash) {
@@ -36,15 +36,15 @@ namespace {
         return (it != g_Handlers.end()) ? &it->second : nullptr;
     }
 
-    // ▌▌ LumaCore ▌ IPC ▌ Main hook
-    // ▌▌
+    //  LumaCore  IPC  Main hook
+    // 
     LC_HOOK_DEF(IPCProcessMessage, bool,
               void* pServer, HSteamPipe hSteamPipe,
               CUtlBuffer* pRead, CUtlBuffer* pWrite)
     {
         auto* pipe = GetPipe(pServer, hSteamPipe);
 
-        // ▌ IPC ▌ Always log every incoming IPC, before any filter
+        //  IPC  Always log every incoming IPC, before any filter
         // Helps diagnose ticket-validation flows that may be silently
         // skipped by the pipe-handle filter below.
         if (pRead->TellPut() >= IPC_HEADER_SIZE) {
@@ -65,7 +65,7 @@ namespace {
                          rawSize, preview);
         }
 
-        // ▌ IPC ▌ Parse header, find handler
+        //  IPC  Parse header, find handler
         const IpcHandlerEntry* handlerEntry = nullptr;
         // userStatsCall is true exactly when the parsed interface is
         // IClientUserStats. Drives the SetUserStatsContext bracket
@@ -111,7 +111,7 @@ namespace {
             }
         }
 
-        // ▌ IPC ▌ Run original
+        //  IPC  Run original
         // Scope is open only for IClientUserStats so the lobby /
         // friends / controller / RemoteStorage pass-through that
         // depends on the 480 masquerade stays byte-identical.

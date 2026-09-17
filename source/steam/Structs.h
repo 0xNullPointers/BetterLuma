@@ -153,7 +153,7 @@ struct DepotEntry
 	uint8   SharedInstall;  // 0x1E, sharedinstall + depotfromapp redirect bit
 	uint8   Padding;        // 0x1F
 };
-static_assert(sizeof(DepotEntry) == 0x20, "LumaCore depot record size drift: DepotEntry no longer matches the 0x20-byte layout LumaCore expects");
+static_assert(sizeof(DepotEntry) == 0x20, "BetterLuma depot record size drift: DepotEntry no longer matches the 0x20-byte layout BetterLuma expects");
 
 struct KeyValues
 {
@@ -196,7 +196,7 @@ struct KeyValues
 	KeyValues*          m_pPeer;            // +0x18 (8B), next sibling node in the linked list
 
 };
-static_assert(sizeof(KeyValues) == 0x20, "LumaCore KeyValues node size drift: KeyValues no longer matches the 0x20-byte layout LumaCore expects");
+static_assert(sizeof(KeyValues) == 0x20, "BetterLuma KeyValues node size drift: KeyValues no longer matches the 0x20-byte layout BetterLuma expects");
 
 // IKeyValuesSystem
 //   LumaCore resolves this interface through the export

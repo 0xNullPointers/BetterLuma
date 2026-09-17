@@ -6,8 +6,8 @@
 #pragma once
 
 // Tracks which hook installers landed and which couldn't resolve their target
-// through the runtime TOML. The result lands in <Steam>\lumacore\status.json
-// so SteaMidra can surface a banner when the running Steam build doesn't have
+// through the runtime TOML. The result lands in <Steam>\betterluma\status.json
+// so external tools can surface a banner when the running Steam build doesn't have
 // a pattern emitted yet.
 //
 // Threading: every public function takes the same internal mutex, so call
@@ -17,7 +17,7 @@
 //
 // Schema produced by WriteToDisk (top-level keys only, exact set):
 //   build_id            string
-//   lumacore_build_stamp string (__DATE__ + __TIME__ from the DLL)
+//   betterluma_build_stamp string (__DATE__ + __TIME__ from the DLL)
 //   build_config        string (Debug or Release)
 //   logging_enabled     boolean (false in shipped Release)
 //   diagnostics_enabled boolean (true in standard builds)
@@ -111,7 +111,7 @@ namespace HookStatus {
     void RecordInstalled();
     void RecordMissed(std::string hookName);
 
-    // Writes the current snapshot to <Steam>\lumacore\status.json via a
+    // Writes the current snapshot to <Steam>\betterluma\status.json via a
     // tmp + MoveFileExA(MOVEFILE_REPLACE_EXISTING) swap. Best-effort: failures
     // log a warning and never throw. The first successful or attempted write
     // marks init as complete, after which every mutator re-publishes.

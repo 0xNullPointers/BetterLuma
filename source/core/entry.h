@@ -47,8 +47,8 @@ inline char SteamclientPath[MAX_PATH] = {};  // <SteamInstallPath>\steamclient64
 inline char SteamuiPath[MAX_PATH]     = {};  // <SteamInstallPath>\steamui.dll
 inline char DiversionPath[MAX_PATH]   = {};  // <SteamInstallPath>\bin\lcoverlay.dll (hooked copy)
 inline char LuaDir[MAX_PATH]          = {};  // <SteamInstallPath>\config\stplug-in
-inline char ConfigPath[MAX_PATH]      = {};  // <SteamInstallPath>\lumacore.toml
-inline char PayloadPath[MAX_PATH]     = {};  // <SteamInstallPath>\LumaCorePayload.dll
+inline char ConfigPath[MAX_PATH]      = {};  // <SteamInstallPath>\BetterLuma.toml
+inline char PayloadPath[MAX_PATH]     = {};  // <SteamInstallPath>\BetterLumaPayload.dll
 
 // Steam build number read at startup from steam.exe!GetBootstrapperVersion.
 // ByteSearch uses this string to select the best-matching Signature entry in PatternDb.h

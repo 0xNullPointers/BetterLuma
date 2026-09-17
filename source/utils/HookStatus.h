@@ -6,8 +6,8 @@
 #pragma once
 
 // Tracks which hook installers landed and which couldn't resolve their target
-// through the runtime TOML. The result lands in <Steam>\lumacore\status.json
-// so SteaMidra can surface a banner when the running Steam build doesn't have
+// through the runtime TOML. The result lands in <Steam>\betterluma\status.json
+// to surface hook status when the running Steam build doesn't have
 // a pattern emitted yet.
 //
 // Threading: every public function takes the same internal mutex, so call

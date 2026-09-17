@@ -42,7 +42,7 @@ namespace Settings {
     void Load(const std::string& configPath)
     {
         std::filesystem::path cfgPath(configPath);
-        logDir = (cfgPath.parent_path() / "lumacore").string();
+        logDir = (cfgPath.parent_path() / "betterluma").string();
 
         if (!std::filesystem::exists(cfgPath)) {
             LOG_INFO("Settings: config not found at '{}', using defaults", configPath);

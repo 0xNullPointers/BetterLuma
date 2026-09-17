@@ -41,7 +41,7 @@ namespace Diagnostics {
             );
         }
 
-        // Resolve <AppData Roaming>\\SteaMidra\\lumacore_diag.txt.
+        // Resolve <AppData Roaming>\\BetterLuma\\diag.txt.
         // The buffer is filled even when AppData lookup fails so callers can
         // still log the path they tried; on failure the function returns
         // false and the caller skips the actual write.
@@ -68,7 +68,7 @@ namespace Diagnostics {
             if (rc <= 0) return false;
 
             int written = std::snprintf(
-                out, cap, "%s\\SteaMidra\\lumacore_diag.txt", appdataA);
+                out, cap, "%s\\BetterLuma\\diag.txt", appdataA);
             if (written <= 0 || static_cast<size_t>(written) >= cap)
                 return false;
 
@@ -76,7 +76,7 @@ namespace Diagnostics {
             // errors (CreateDirectoryA returns 0 if the dir already exists,
             // which is fine here - actual write failure surfaces below).
             char parent[MAX_PATH] = {};
-            std::snprintf(parent, MAX_PATH, "%s\\SteaMidra", appdataA);
+            std::snprintf(parent, MAX_PATH, "%s\\BetterLuma", appdataA);
             CreateDirectoryA(parent, nullptr);
             return true;
         }
@@ -134,7 +134,7 @@ namespace Diagnostics {
         const uint64_t now     = NowMs();
         std::fprintf(
             fp,
-            "[lumacore-diag] reason=%s steamid64=%llu ts_ms=%llu entries=%u\n",
+            "[betterluma-diag] reason=%s steamid64=%llu ts_ms=%llu entries=%u\n",
             reason ? reason : "?",
             static_cast<unsigned long long>(steamId),
             static_cast<unsigned long long>(now),

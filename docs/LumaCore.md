@@ -1,7 +1,7 @@
 # BetterLumaCore - Feature Reference
 <!-- BetterLumaCore technical architecture and subsystem reference. -->
 
-This document describes every subsystem in BetterLumaCore, its purpose, the Steam internals it touches, and the configuration interface exposed via Lua scripts and `lumacore.toml`.
+This document describes every subsystem in BetterLumaCore, its purpose, the Steam internals it touches, and the configuration interface exposed via Lua scripts and `BetterLuma.toml`.
 
 Original work by Midrags. Copyright of all original files is held by Midrags.
 Modifications, architectural enhancements, and continued development by 0xBadCod3.
@@ -12,12 +12,12 @@ Modifications, architectural enhancements, and continued development by 0xBadCod
 
 Steam loads DLLs from its own directory on startup. BetterLumaCore exploits this by placing thin proxy DLLs alongside `steam.exe`:
 
-- `dwmapi.dll` - forwards the full DWM API surface and loads `LumaCore.dll` on attach
-- `xinput1_4.dll` - forwards XInput 1.4 exports; acts as a backup load gate, calling `LoadLibraryA("LumaCore.dll")` on process attach as well
+- `dwmapi.dll` - forwards the full DWM API surface and loads `BetterLuma.dll` on attach
+- `xinput1_4.dll` - forwards XInput 1.4 exports; acts as a backup load gate, calling `LoadLibraryA("BetterLuma.dll")` on process attach as well
 
-When Steam starts, Windows loads the proxy DLLs before any game code runs. The proxy's `DllMain` loads `LumaCore.dll` and returns.
+When Steam starts, Windows loads the proxy DLLs before any game code runs. The proxy's `DllMain` loads `BetterLuma.dll` and returns.
 
-`LumaCore.dll` then:
+`BetterLuma.dll` then:
 
 1. Copies `steamclient64.dll` to `bin\lcoverlay.dll` (with retry logic in case the file is locked).
 2. Loads `lcoverlay.dll` explicitly so it has an independent module handle.
@@ -27,7 +27,7 @@ When Steam starts, Windows loads the proxy DLLs before any game code runs. The p
 
 The copy step is necessary because hooking the live `steamclient64.dll` while it is already mapped into the process would require patching code that is in use. Hooking the private copy avoids race conditions and keeps the original file untouched on disk.
 
-For OnlineFix games, `LumaCorePayload.dll` is injected directly into game processes via `CreateProcess` hooks to handle the Epic Online Services (EOS) bridge and Spacewar (480) multiplayer redirection.
+For OnlineFix games, `BetterLumaPayload.dll` is injected directly into game processes via `CreateProcess` hooks to handle the Epic Online Services (EOS) bridge and Spacewar (480) multiplayer redirection.
 
 ---
 
@@ -46,16 +46,16 @@ rva  = "0xD15DD0"
 sig  = "48 8B C4 55 48 8D 68 A1 48 81 EC C0 00 00 00 48 89 70 18"
 ```
 
-The schema matches the runtime pattern map format - TOML files dropped into `<Steam>\lumacore\pattern\` resolve without further conversion.
+The schema matches the runtime pattern map format - TOML files dropped into `<Steam>\betterluma\pattern\` resolve without further conversion.
 
 ### Source priority
 
 For each DLL, the fetcher tries sources in this order:
 
-1. **User mirror** (optional). Configured under `[pattern_fetch] url_template` or `mirror` in `lumacore.toml`. BetterLumaCore supports full template placeholder substitution: `{channel}`, `{component}`, `{subdir}` (`steamclient`, `steamui`, or `steamclientipc`), `{sha256}`, and `{sha}`. Any failure (HTTP 4xx/5xx, network error, parse error) logs a debug line and falls through.
+1. **User mirror** (optional). Configured under `[pattern_fetch] url_template` or `mirror` in `BetterLuma.toml`. BetterLumaCore supports full template placeholder substitution: `{channel}`, `{component}`, `{subdir}` (`steamclient`, `steamui`, or `steamclientipc`), `{sha256}`, and `{sha}`. Any failure (HTTP 4xx/5xx, network error, parse error) logs a debug line and falls through.
 2. **GitHub raw** - `raw.githubusercontent.com/KoriaPolis/Steam-Auto-PT/pattern/<subdir>/<sha>.toml`.
 3. **jsDelivr CDN** - `cdn.jsdelivr.net/gh/KoriaPolis/Steam-Auto-PT@pattern/<subdir>/<sha>.toml`. Used only on transport failure since GitHub raw and jsDelivr serve the same content; a 404 from either short-circuits to the cache step.
-4. **Local cache** - `<Steam>\lumacore\pattern\<sha>.toml`. Always written-through on a successful fetch and always read on a network miss.
+4. **Local cache** - `<Steam>\betterluma\pattern\<sha>.toml`. Always written-through on a successful fetch and always read on a network miss.
 
 ### Cache and atomic writes
 
@@ -73,7 +73,7 @@ There are no compiled-in `*Sigs[]` arrays anymore. The runtime pattern map is th
 
 If Steam updates and BetterLumaCore stops resolving hooks for the new client, downgrade Steam if possible and report the Steam update to the maintainer with the collected logs.
 
-The runtime fetcher's own logs (`<Steam>\lumacore\misc.log`) note every overlay, cache, and network step so failed pattern resolution can be triaged from user logs.
+The runtime fetcher's own logs (`<Steam>\betterluma\misc.log`) note every overlay, cache, and network step so failed pattern resolution can be triaged from user logs.
 
 ---
 
@@ -83,7 +83,7 @@ The runtime fetcher's own logs (`<Steam>\lumacore\misc.log`) note every overlay,
 
 Hooks `LoadDepotDecryptionKey`.
 
-When Steam mounts a depot it calls this function to fetch the AES-128 decryption key for that depot from the user's license data. The hook intercepts the call, checks whether `LuaLoader` has a key for the requested depot ID (loaded from the `.lua` script provided by SteaMidra), and writes it into the output buffer. If no key is known, the call falls through to the original function.
+When Steam mounts a depot it calls this function to fetch the AES-128 decryption key for that depot from the user's license data. The hook intercepts the call, checks whether `LuaLoader` has a key for the requested depot ID (loaded from the `.lua` script), and writes it into the output buffer. If no key is known, the call falls through to the original function.
 
 Lua interface:
 
@@ -118,7 +118,7 @@ Uses thread-safe depth tracking (`StatsGuard`) to ensure `IClientUserStats` and 
 
 Handles the `GetSteamID` and `GetAppOwnershipTicketExtendedData` IPC commands.
 
-**GetSteamID**: returns the SteamID configured in `lumacore.toml` under `[user] steam_id`. For Denuvo-protected titles, which embed the owning SteamID in the AppTicket and validate it at runtime, BetterLumaCore uses `GetDynamicOwnerSteamID`. That function searches `Steam\userdata\` directories for an account that has local app data for the requested game and returns that account's ID. This avoids hardcoding a single SteamID for users who run multiple accounts.
+**GetSteamID**: returns the SteamID configured in `BetterLuma.toml` under `[user] steam_id`. For Denuvo-protected titles, which embed the owning SteamID in the AppTicket and validate it at runtime, BetterLumaCore uses `GetDynamicOwnerSteamID`. That function searches `Steam\userdata\` directories for an account that has local app data for the requested game and returns that account's ID. This avoids hardcoding a single SteamID for users who run multiple accounts.
 
 **GetAppOwnershipTicketExtendedData**: serves a cached or forged AppTicket for apps listed in the active `.lua` config. BetterLumaCore rejects stale tickets when the embedded app ID does not match the requested app. Steam Stub auto routes prefer an app-7 forged target ticket and log non-app-7 target tickets as fallback-only so they cannot look like the working path. `CmdUser` is the single owner for `IClientUser` ticket replies and writes Steam's fixed reply shape: reply tag, signed ticket total-size return value, fixed `pTicket(cbMaxTicket)` slot, `piAppId`, `piSteamId`, `piSignature`, and `pcbSignature`.
 
@@ -197,9 +197,9 @@ When the Lua config calls `setEticket()` or `seteticketurl()`, the fetcher issue
 
 ### OnlineFixInject (`hooks/client/OnlineFixInject.cpp`)
 
-Detours `CreateProcessW` and `CreateProcessAsUserW` to inject `LumaCorePayload.dll` into game processes launched through the 480 route.
+Detours `CreateProcessW` and `CreateProcessAsUserW` to inject `BetterLumaPayload.dll` into game processes launched through the 480 route.
 
-When Steam spawns a manual `-onlinefix` game process, the CreateProcess hook claims the queued executable, creates the process suspended, loads the payload DLL, and resumes the thread. LumaCorePayload then handles EOS bridge / lobby redirection for online-fix multiplayer. Steam Stub auto launches do not use this payload path.
+When Steam spawns a manual `-onlinefix` game process, the CreateProcess hook claims the queued executable, creates the process suspended, loads the payload DLL, and resumes the thread. BetterLumaPayload then handles EOS bridge / lobby redirection for online-fix multiplayer. Steam Stub auto launches do not use this payload path.
 
 **Multi-Game & Multi-Process Child Resolution (BetterLumaCore Enhancement)**:
 BetterLumaCore supports launching and running multiple OnlineFix titles simultaneously (Kindof). In addition to primary process PIDs captured during `LaunchSuspended`, launcher-based games (such as Unreal Engine / Unity titles that spawn separate shipping binaries) are resolved in `ClaimFallbackRoute`. BetterLumaCore calls `SteamCapture::AssociateOnlineFixPid(childPid, targetAppId)` to associate child worker processes with their parent OnlineFix AppID, guaranteeing full attachment and IPC routing.
@@ -338,7 +338,7 @@ This is more update-proof for functions called only at game-launch time. It is i
 
 ## Lua configuration format
 
-SteaMidra writes `.lua` files to `Steam\config\stplug-in\<appid>.lua`. BetterLumaCore watches this directory and reloads files as they change.
+`.lua` files are placed in `Steam\config\stplug-in\<appid>.lua`. BetterLumaCore watches this directory and reloads files as they change.
 
 ### App and depot registration
 
@@ -431,9 +431,9 @@ General-purpose HTTP GET and POST from within Lua scripts. Host-gated to a hardc
 
 ---
 
-## Configuration file (`lumacore.toml`)
+## Configuration file (`BetterLuma.toml`)
 
-Placed in the Steam installation directory. SteaMidra writes this file during setup.
+Placed in the Steam installation directory.
 
 ```toml
 [user]
@@ -444,7 +444,7 @@ steam_id = "76561198028121353"  # SteamID64 to spoof in GetSteamID responses
 url_template = ""
 
 [onlinefix]
-# Inject LumaCorePayload.dll into online-fix game processes for EOS bridge.
+# Inject BetterLumaPayload.dll into online-fix game processes for EOS bridge.
 inject_enabled = true
 ```
 
@@ -454,7 +454,7 @@ All other settings use built-in defaults.
 
 Logging is compiled in only for Debug builds (`LUMACORE_LOGGING_ENABLED` define). Release builds compile all `LOG_*` macros to no-ops so there is no runtime overhead.
 
-When enabled, logs are written to `Steam\lumacore\` alongside `LumaCore.dll`. Each module writes to its own file:
+When enabled, logs are written to `Steam\betterluma\` alongside `BetterLuma.dll`. Each module writes to its own file:
 
 | File | Module |
 |---|---|
@@ -480,7 +480,7 @@ When enabled, logs are written to `Steam\lumacore\` alongside `LumaCore.dll`. Ea
 
 The `pattern\` subdirectory next to these logs holds the cached `<sha>.toml` files the runtime fetcher uses. Files there are safe to delete; they get re-fetched on next launch.
 
-Log level is controlled by `lumacore.toml` under `[log] level = "debug"` (default: `info`).
+Log level is controlled by `BetterLuma.toml` under `[log] level = "debug"` (default: `info`).
 
 ### Known-good SteamStub markers
 

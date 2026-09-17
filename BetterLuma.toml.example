@@ -1,6 +1,6 @@
-# lumacore.toml - BetterLumaCore configuration
+# BetterLuma.toml - BetterLumaCore configuration
 # Place this file in your Steam installation directory (next to steam.exe).
-# Rename to lumacore.toml to activate. All sections are optional - missing
+# Rename to BetterLuma.toml to activate. All sections are optional - missing
 # keys fall back to the defaults shown below.
 
 [log]
@@ -16,7 +16,7 @@ paths = []
 [manifest_fetch]
 # URL chain for depot manifest downloads, tried in order until one returns 200.
 # {gid} is replaced with the manifest GID at request time.
-# The first built-in provider needs a compatibility User-Agent; LumaCore adds it internally.
+# The first built-in provider needs a compatibility User-Agent; BetterLuma adds it internally.
 urls = [
     "https://manifest.opensteamtool.com/{gid}",
     "https://manifest.steam.run/api/manifest/{gid}",
@@ -39,9 +39,9 @@ trusted_hosts = [
 #   {subdir}    - Component subdirectory ("steamclient", "steamui", "steamclientipc")
 #   {sha256}    - Lowercase 64-character SHA-256 hash of target DLL
 #   {sha}       - Same as {sha256}
-# NOTE: LumaCore does NOT provide any default remote pattern links.
+# NOTE: BetterLuma does NOT provide any default remote pattern links.
 # If url_template / mirror is empty or omitted, remote network fetching is skipped
-# and LumaCore operates strictly in cache-only mode.
+# and BetterLuma operates strictly in cache-only mode.
 # Can also be specified as url_template under [pattern_fetch] or [remote] (OpenSteamTool format).
 # Example:
 # url_template = "https://raw.githubusercontent.com/user/patterns/{channel}/{component}/{sha256}.toml"
@@ -60,7 +60,7 @@ x86 = ""
 x64 = ""
 
 [onlinefix]
-# Inject LumaCorePayload.dll into online-fix game processes for EOS bridge
+# Inject BetterLumaPayload.dll into online-fix game processes for EOS bridge
 inject_enabled = true
 
 [boot]
@@ -81,21 +81,21 @@ auto_enabled = false
 # CloudRedirect (https://github.com/Selectively11/CloudRedirect).
 #
 # When enabled = true:
-#   LumaCore loads cloud_redirect.dll inside Steam, registers every addappid() game
+#   BetterLuma loads cloud_redirect.dll inside Steam, registers every addappid() game
 #   as a redirected app, and routes their Steam Cloud RPCs through CloudRedirect's
 #   cloud-save engine.
 #   Provider sign-in (Google Drive / OneDrive / local folder) is still done through
-#   CloudRedirect's companion app — LumaCore only hosts the DLL.
+#   CloudRedirect's companion app — BetterLuma only hosts the DLL.
 #   Note: When enabled = true, the suppressed setting is ignored and CloudRedirect
 #   manages cloud saves directly.
 #
 # When enabled = false:
 #   CloudRedirect is disabled.
 #   - If suppressed = true (default):
-#     LumaCore disables Steam Cloud for Lua-unlocked games and suppresses the
+#     BetterLuma disables Steam Cloud for Lua-unlocked games and suppresses the
 #     "Cloud Sync Failed" error dialog and warning notifications.
 #   - If suppressed = false:
-#     LumaCore ignores suppression logic and lets native Steam handle cloud save
+#     BetterLuma ignores suppression logic and lets native Steam handle cloud save
 #     checks normally without blocking or faking sync state.
 enabled = false
 suppressed = true

@@ -107,7 +107,7 @@ namespace IpcSpecLoader {
         // ── cache path ──────────────────────────────────────────────────────
 
         std::filesystem::path CacheDir() {
-            return std::filesystem::path(SteamInstallPath) / "lumacore" / "pattern" / "steamclientipc";
+            return std::filesystem::path(SteamInstallPath) / "betterluma" / "pattern" / "steamclientipc";
         }
 
         std::filesystem::path CachePath(const std::string& sha) {
@@ -262,7 +262,7 @@ namespace IpcSpecLoader {
             errorOut.clear();
 
             if (Settings::patternMirror.empty()) {
-                errorOut = "no mirror configured in lumacore.toml";
+                errorOut = "no mirror configured in BetterLuma.toml";
                 return false;
             }
 

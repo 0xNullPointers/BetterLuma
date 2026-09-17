@@ -280,7 +280,7 @@ namespace {
                         LOG_PACKAGE_INFO("CheckAppOwnership: appId={} is a known Steam Stub title; "
                                          "normal launches use the dedicated SteamStub auto route "
                                          "when the preflight AppTicket is OK. If Steam still "
-                                         "reports error 54 after that, try Remove SteamStub from SteaMidra.",
+                                         "reports error 54 after that, try Remove SteamStub (Steamless).",
                                          appId);
                     }
                 }

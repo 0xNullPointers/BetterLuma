@@ -138,7 +138,7 @@ namespace {
                 if (Ticket::IsKnownSteamDrmApp(appId)) {
                     LOG_PACKAGE_INFO("CheckAppOwnership: appId={} is a known Steam-DRM (Steam Stub) "
                                      "title. If launch fails with error 54, try Remove SteamStub "
-                                     "(Steamless) from SteaMidra - ownership patching alone is not "
+                                     "(Steamless) - ownership patching alone is not "
                                      "enough for the wrapper's local ticket check.",
                                      appId);
                 }

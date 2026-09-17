@@ -34,7 +34,7 @@ namespace LumaCore {
     void Detach() {
 #ifdef LUMACORE_DIAGNOSTICS_ENABLED
         // A16 auto-flush: write the achievement diagnostic ring to
-        // <AppData>\\SteaMidra\\lumacore_diag.txt before tearing down
+        // <AppData>\\BetterLuma\\diag.txt before tearing down
         // the hooks. Steam restart wipes the ring otherwise.
         Diagnostics::DumpForDetach();
 #endif

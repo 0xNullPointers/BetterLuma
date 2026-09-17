@@ -16,8 +16,8 @@
 
 #include "steam_messages.pb.h"
 
-// ▌▌ LumaCore ▌ WIRE ▌ Shared infrastructure
-// ▌▌
+//  LumaCore  WIRE  Shared infrastructure
+// 
 namespace {
 
     // 6.2.4 hotfix: bumped from 8092 to 262144 (256 KB) to accommodate
@@ -144,9 +144,9 @@ namespace {
 } // anonymous namespace
 
 
-// ▌▌ LumaCore ▌ WIRE ▌ AccessToken
+//  LumaCore  WIRE  AccessToken
 //  Outgoing: CMsgClientPICSProductInfoRequest (eMsg 8903)
-// ▌▌
+// 
 namespace AccessToken {
 
     bool HandleSend(const uint8* pBody, uint32 cbBody)
@@ -209,12 +209,12 @@ namespace AccessToken {
 } // namespace AccessToken
 
 
-// ▌▌ LumaCore ▌ WIRE ▌ UserStats
+//  LumaCore  WIRE  UserStats
 //  Outgoing: CPlayer_GetUserStats_Request  (eMsg 151 -> target: Player.GetUserStats#1)
 //            CMsgClientGetUserStats        (eMsg 818)
 //  Incoming: CPlayer_GetUserStats_Response (eMsg 147 <- target: Player.GetUserStats#1)
 //            CMsgClientGetUserStatsResponse(eMsg 819)
-// ▌▌
+// 
 namespace UserStats {
 
     // jobid_source -> {appid, insert_time} mapping (eMsg 151 request -> eMsg 147 response)
@@ -557,9 +557,9 @@ namespace UserStats {
 } // namespace UserStats
 
 
-// ▌▌ LumaCore ▌ WIRE ▌ ETicket
+//  LumaCore  WIRE  ETicket
 //  Incoming: CMsgClientRequestEncryptedAppTicketResponse (eMsg 5527)
-// ▌▌
+// 
 namespace ETicket {
 
     void HandleEncryptedAppTicketResponse(const uint8* pBody, uint32 cbBody)
@@ -604,7 +604,7 @@ namespace ETicket {
 } // namespace ETicket
 
 
-// ▌▌ LumaCore ▌ WIRE ▌ AppOwnershipTicketResponse (debug-only inspector for now)
+//  LumaCore  WIRE  AppOwnershipTicketResponse (debug-only inspector for now)
 //  Incoming: CMsgClientGetAppOwnershipTicketResponse  (eMsg 858)
 //  Outgoing: CMsgClientGetAppOwnershipTicket          (eMsg 857)
 //
@@ -617,7 +617,7 @@ namespace ETicket {
 //  can see exactly what the server is sending. No patching yet; once
 //  the wire format is confirmed we will build a forged success reply
 //  here using the cached registry blob.
-// ▌▌
+// 
 namespace AppOwnershipTicketResp {
 
     void HandleSend(const uint8* pBody, uint32 cbBody)
@@ -666,8 +666,8 @@ namespace AppOwnershipTicketResp {
 } // namespace AppOwnershipTicketResp
 
 
-// ▌▌ LumaCore ▌ WIRE ▌ FamilySharing
-// ▌▌
+//  LumaCore  WIRE  FamilySharing
+// 
 namespace FamilySharing {
 
     void ClearBody(const uint8*, uint32)
@@ -682,13 +682,13 @@ namespace FamilySharing {
 
 
 
-// ▌▌ LumaCore ▌ WIRE ▌ OnlineFix
+//  LumaCore  WIRE  OnlineFix
 //  Outgoing: CMsgClientGamesPlayed (eMsg 742 / 5410)
 //
 //  When a game launched with -onlinefix reports appid 480, replace
 //  game_extra_info with the real game's localized name so friends
 //  see the correct title.
-// ▌▌
+// 
 namespace OnlineFix {
 
     bool HandleSend(const uint8* pBody, uint32 cbBody)
@@ -761,7 +761,7 @@ namespace OnlineFix {
 } // namespace OnlineFix
 
 
-// ▌▌ LumaCore ▌ WIRE ▌ DepotFallback
+//  LumaCore  WIRE  DepotFallback
 //  Outgoing: ContentServerDirectory.GetManifestRequestCode#1  (eMsg 151)
 //  Incoming: ContentServerDirectory.GetManifestRequestCode#1  (eMsg 147)
 //
@@ -774,7 +774,7 @@ namespace OnlineFix {
 //  On timeout/failure the original frame just passes through, so a
 //  legitimately-owned depot or a busted mirror never makes things
 //  worse than they already were.
-// ▌▌
+// 
 namespace DepotFallback {
 
     bool HandleSend(const uint8* pBody, uint32 cbBody,
@@ -869,8 +869,8 @@ namespace DepotFallback {
 } // namespace DepotFallback
 
 
-// ▌▌ LumaCore ▌ WIRE ▌ Dispatch
-// ▌▌
+//  LumaCore  WIRE  Dispatch
+// 
 namespace {
 
     bool SendServiceJob(const char* targetJobName,
@@ -1024,8 +1024,8 @@ namespace {
         }
     }
 
-    // ▌ WIRE ▌ Hooks
-    // ▌
+    //  WIRE  Hooks
+    // 
 
     LC_HOOK_DEF(BBuildAndAsyncSendFrame, bool,
               void* pObject, EWebSocketOpCode eWebSocketOpCode,

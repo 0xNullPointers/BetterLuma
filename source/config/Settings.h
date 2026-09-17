@@ -27,7 +27,7 @@ namespace Settings {
     // before sending logs.
     inline bool verbose = true;
 
-    // derived from configPath: <steam>/lumacore/
+    // derived from configPath: <steam>/betterluma/
     inline std::string logDir;
 
     // [lua]
@@ -99,7 +99,7 @@ namespace Settings {
 
     // [onlinefix]
     // Master switch for the CreateProcessW/AsUserW injection hooks that load
-    // LumaCorePayload.dll into -onlinefix game processes. Set to false when
+    // BetterLumaPayload.dll into -onlinefix game processes. Set to false when
     // only Lua-level decoy / ticket forging is needed (no multiplayer bridge).
     inline bool onlineFixInjectEnabled = true;
 

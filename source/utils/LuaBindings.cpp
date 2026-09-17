@@ -264,7 +264,7 @@ namespace LuaLoader::Internal {
     // Plugin-side runtime HTTP GET. The 00_LetUpdate_override and any
     // future user-supplied .lua that wants to fetch a manifest GID
     // off a clearnet host can call this without going back through the
-    // SteaMidra GUI. Body cap is 8 MiB and the total budget is 12s; both
+    // client GUI. Body cap is 8 MiB and the total budget is 12s; both
     // are enforced inside RuntimeHttp::Get. On a network error the body
     // returned is the empty string and status is 0.
     //
@@ -272,7 +272,7 @@ namespace LuaLoader::Internal {
     // into stplug-in could pair lcHttpGet with the addappid/setStat read
     // surface and silently exfil to whatever URL the attacker controls.
     // The host gate below kills that vector. The hardcoded set covers the
-    // hosts SteaMidra's official update flows actually need, and the user
+    // hosts official update flows actually need, and the user
     // can extend through `[lua] http_allowlist` if they're using a private
     // mirror. Anything not on the combined list returns 403/empty without
     // the network ever being reached.

@@ -170,8 +170,8 @@ namespace CoreInit {
             sprintf_s(SteamuiPath,     MAX_PATH, "%s\\steamui.dll",         SteamInstallPath);
             sprintf_s(DiversionPath,   MAX_PATH, "%s\\bin\\lcoverlay.dll",  SteamInstallPath);
             sprintf_s(LuaDir,          MAX_PATH, "%s\\config\\stplug-in",   SteamInstallPath);
-            sprintf_s(ConfigPath,      MAX_PATH, "%s\\lumacore.toml",       SteamInstallPath);
-            sprintf_s(PayloadPath,     MAX_PATH, "%s\\LumaCorePayload.dll", SteamInstallPath);
+            sprintf_s(ConfigPath,      MAX_PATH, "%s\\BetterLuma.toml",     SteamInstallPath);
+            sprintf_s(PayloadPath,     MAX_PATH, "%s\\BetterLumaPayload.dll", SteamInstallPath);
             // ensure bin\ directory exists before copying
             char binDir[MAX_PATH];
             sprintf_s(binDir, MAX_PATH, "%s\\bin", SteamInstallPath);
@@ -253,7 +253,7 @@ namespace CoreInit {
                     WideCharToMultiByte(CP_ACP, 0, wSelf, -1, SteamInstallPath, MAX_PATH, nullptr, nullptr);
                 }
             }
-            sprintf_s(ConfigPath,      MAX_PATH, "%s\\lumacore.toml",       SteamInstallPath);
+            sprintf_s(ConfigPath,      MAX_PATH, "%s\\BetterLuma.toml",     SteamInstallPath);
             sprintf_s(SteamclientPath, MAX_PATH, "%s\\steamclient64.dll",   SteamInstallPath);
             sprintf_s(SteamuiPath,     MAX_PATH, "%s\\steamui.dll",         SteamInstallPath);
             sprintf_s(DiversionPath,   MAX_PATH, "%s\\bin\\lcoverlay.dll",  SteamInstallPath);

@@ -25,7 +25,7 @@ namespace Settings {
     // before sending logs.
     inline bool verbose = true;
 
-    // derived from configPath: <steam>/lumacore/
+    // derived from configPath: <steam>/betterluma/
     inline std::string logDir;
 
     // [lua]

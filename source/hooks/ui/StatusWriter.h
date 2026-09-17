@@ -5,7 +5,7 @@
 
 #pragma once
 
-// Status writer for SteaMidra. Every hook installer reports a hit or miss as
+// Status writer. Every hook installer reports a hit or miss as
 // it runs; once init is done the data gets flushed to <Steam>\lumacore\status.json
 // so the GUI can poll the file and surface a banner when the running Steam
 // build's TOML hasn't been uploaded yet.
@@ -47,7 +47,7 @@ namespace StatusWriter {
 
     // Writes the accumulated status to <Steam>\lumacore\status.json. Safe to
     // call multiple times - the writer rebuilds the JSON each call from the
-    // current in-memory state, so SteaMidra always sees the latest hit/miss
-    // counts. Called from entry.cpp at end of init and again on detach.
+    // current in-memory state, so the latest hit/miss counts always logs.
+    // Called from entry.cpp at end of init and again on detach.
     void Flush();
 }

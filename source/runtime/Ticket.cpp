@@ -543,7 +543,7 @@ namespace Ticket {
         auto ReadCached = []() -> uint64_t {
             char buf[32] = {};
             DWORD sz = sizeof(buf);
-            if (RegGetValueA(HKEY_CURRENT_USER, "Software\\Valve\\Steam\\lumacore",
+            if (RegGetValueA(HKEY_CURRENT_USER, "Software\\Valve\\Steam\\betterluma",
                              "LastActiveSteamId", RRF_RT_REG_SZ, nullptr, buf, &sz) == ERROR_SUCCESS) {
                 char* end = nullptr;
                 uint64_t v = strtoull(buf, &end, 16);
@@ -556,7 +556,7 @@ namespace Ticket {
             char buf[32];
             std::snprintf(buf, sizeof(buf), "%llX", static_cast<unsigned long long>(sid));
             HKEY hk = nullptr;
-            if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\Valve\\Steam\\lumacore",
+            if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\Valve\\Steam\\betterluma",
                                 0, nullptr, 0, KEY_WRITE, nullptr, &hk, nullptr) == ERROR_SUCCESS) {
                 RegSetValueExA(hk, "LastActiveSteamId", 0, REG_SZ,
                                reinterpret_cast<const BYTE*>(buf),

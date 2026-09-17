@@ -105,7 +105,7 @@ namespace HookStatus {
                 LOG_WARN("HookStatus: SteamInstallPath unset, skipping write");
                 return false;
             }
-            std::filesystem::path dir = std::filesystem::path(SteamInstallPath) / "lumacore";
+            std::filesystem::path dir = std::filesystem::path(SteamInstallPath) / "betterluma";
             std::error_code ec;
             std::filesystem::create_directories(dir, ec);
             if (ec) {

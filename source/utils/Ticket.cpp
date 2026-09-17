@@ -402,7 +402,7 @@ namespace Ticket {
                     if (IsKnownSteamDrmApp(appId)) {
                         LOG_INFO("EnsureRegistryTicketsForApp: AppId={} is a known Steam-DRM title - "
                                  "the fabricated ticket is unsigned and will likely be rejected by the "
-                                 "wrapper's signature check (error 54). Use Steamless from SteaMidra "
+                                 "wrapper's signature check (error 54). Use Steamless "
                                  "to strip the wrapper if launch fails.",
                                  appId);
                     }

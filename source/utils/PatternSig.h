@@ -10,7 +10,7 @@
 // (or someone serving a forged TOML) cannot forge a sig that passes
 // without also obtaining the maintainer's private key.
 //
-// This module is fully self-contained: BCrypt only, no SteaMidra calls,
+// This module is fully self-contained: BCrypt only, no external calls,
 // no analyzer calls, no external state. The pattern repo can ship with
 // or without sidecar .sig files and LumaCore handles both.
 //

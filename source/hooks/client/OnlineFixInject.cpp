@@ -346,7 +346,7 @@ namespace {
     CreateProcessW_t       oCreateProcessW       = nullptr;
     CreateProcessAsUserW_t oCreateProcessAsUserW = nullptr;
 
-    // Injects LumaCorePayload.dll into a newly spawned, suspended process.
+    // Injects BetterLumaPayload.dll into a newly spawned, suspended process.
     // Uses DetourUpdateProcessWithDll to update the PE import directory of the
     // target process directly in memory. When the process's primary thread is resumed,
     // ntdll!LdrpInitializeProcess loads the payload natively before any application

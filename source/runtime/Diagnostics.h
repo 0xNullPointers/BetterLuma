@@ -11,8 +11,7 @@
 // EMsg 147 strip / pass-through, EMsgs 817-819 record-only) for triage on
 // shipped Release builds. The ring lives behind LUMACORE_DIAGNOSTICS_ENABLED
 // and is on for both Debug and Release in the standard build, so users who
-// hit the Wukong reproducer can dump it from the SteaMidra Help menu and
-// share the file.
+// hit the Wukong reproducer can dump it and share the file.
 //
 // Hot path: Record() is lock-free, allocation-free, and never performs I/O.
 // One std::atomic<uint32_t> write index with wraparound modulo 64. The dump
@@ -52,7 +51,7 @@ namespace Diagnostics {
     void Record(Surface s, uint32_t code, uint32_t appid, Action a) noexcept;
 
     // Append the ring's 64 most-recent entries to
-    // <AppData>\\SteaMidra\\lumacore_diag.txt. Returns true on success,
+    // <AppData>\\BetterLuma\\diag.txt. Returns true on success,
     // false on any I/O failure (silent - never throws, never logs to UI).
     bool Dump(const char* reason) noexcept;
 

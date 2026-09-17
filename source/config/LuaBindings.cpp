@@ -43,7 +43,7 @@ namespace LuaLoader::Internal {
     // into stplug-in could pair lcHttpGet with the addappid/setStat read
     // surface and silently exfil to whatever URL the attacker controls.
     // The host gate below kills that vector. The hardcoded set covers the
-    // hosts SteaMidra's official update flows actually need, and the user
+    // hosts official update flows actually need, and the user
     // can extend through `[lua] http_allowlist` if they're using a private
     // mirror. Anything not on the combined list returns 403/empty without
     // the network ever being reached.

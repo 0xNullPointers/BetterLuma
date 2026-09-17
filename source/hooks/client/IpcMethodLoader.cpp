@@ -98,7 +98,7 @@ namespace IpcLoader {
         }
 
         std::filesystem::path CachePathForSha(const std::string& sha) {
-            return std::filesystem::path(SteamInstallPath) / "lumacore" / "pattern" / kIPCSubdir / (sha + ".toml");
+            return std::filesystem::path(SteamInstallPath) / "betterluma" / "pattern" / kIPCSubdir / (sha + ".toml");
         }
 
         // Substitute {channel}, {component}, {subdir}, {sha256}, and {sha} placeholders in mirror template.

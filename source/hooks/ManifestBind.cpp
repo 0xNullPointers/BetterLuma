@@ -9,7 +9,7 @@
 #include <format>
 #include <string>
 
-// ▌▌ LumaCore ▌ MANIFEST ▌ Manifest override hook
+//  LumaCore  MANIFEST  Manifest override hook
 //  BuildDepotDependency patches depot entries' gid/size directly in the
 //  output vector after Steam builds the depot list.
 //
@@ -18,10 +18,10 @@
 //  returns the right answer for Lua-tracked appids through the existing
 //  CheckAppOwnership patch, so adding those would be redundant and would
 //  re-introduce wrong-target risk on builds where their TOML rva drifts.
-// ▌▌
+// 
 namespace {
 
-    // ▌ MANIFEST ▌ helper
+    //  MANIFEST  helper
 
     std::string DepotStr(const DepotEntry& e) {
         return std::format("[DepotId={} | AppId={} | Gid={} | Size={} | Dlc={} | Lcs={} | Carry={} | Shared={}]",
@@ -29,7 +29,7 @@ namespace {
             (int)e.LcsRequired, (int)e.bNotNewTarget, (int)e.SharedInstall);
     }
 
-    // ▌ MANIFEST ▌ BuildDepotDependency hook
+    //  MANIFEST  BuildDepotDependency hook
     // After Steam builds the depot list for an app, patch ManifestGid
     // and ManifestSize for any depots we have overrides for.
 
