@@ -97,8 +97,9 @@ namespace IPCBus::Registry {
         f.pipe = PipeForHandle(pServer, hPipe);
         if (!f.pipe) return f;
 
-        if (pRead->TellPut() >= IPC_HEADER_SIZE) {
+        if (pRead && pRead->TellPut() >= IPC_HEADER_SIZE) {
             const auto* raw = pRead->Base();
+            if (!raw) return f;
             const auto ec = static_cast<EIPCCommand>(raw[OFFSET_CMD]);
 
             LOG_IPCRTR_INFO("\"cmd\" \"{}\" \"pipe\" \"0x{:08X}\" \"size\" {}",
@@ -116,7 +117,8 @@ namespace IPCBus::Registry {
                 }
                 PipeWatch::TouchPipe(f.pipe);
                 const auto iface = static_cast<EIPCInterface>(raw[OFFSET_INTERFACE_ID]);
-                const uint32_t fHash = *reinterpret_cast<const uint32_t*>(raw + OFFSET_FUNC_HASH);
+                uint32_t fHash = 0;
+                std::memcpy(&fHash, raw + OFFSET_FUNC_HASH, sizeof(fHash));
                 f.realAppIdCall = ShouldRouteInterfaceToRealAppId(iface);
                 f.handler = Lookup(iface, fHash);
                 if (f.handler) {
@@ -333,11 +335,30 @@ namespace {
         HANDLE hFile = INVALID_HANDLE_VALUE;
         DWORD fileSize = 0;
 
+        VerifiedSaveFile() = default;
         ~VerifiedSaveFile() {
             if (hFile != INVALID_HANDLE_VALUE) {
                 CloseHandle(hFile);
                 hFile = INVALID_HANDLE_VALUE;
             }
+        }
+        VerifiedSaveFile(const VerifiedSaveFile&) = delete;
+        VerifiedSaveFile& operator=(const VerifiedSaveFile&) = delete;
+        VerifiedSaveFile(VerifiedSaveFile&& o) noexcept : hFile(o.hFile), fileSize(o.fileSize) {
+            o.hFile = INVALID_HANDLE_VALUE;
+            o.fileSize = 0;
+        }
+        VerifiedSaveFile& operator=(VerifiedSaveFile&& o) noexcept {
+            if (this != &o) {
+                if (hFile != INVALID_HANDLE_VALUE) {
+                    CloseHandle(hFile);
+                }
+                hFile = o.hFile;
+                fileSize = o.fileSize;
+                o.hFile = INVALID_HANDLE_VALUE;
+                o.fileSize = 0;
+            }
+            return *this;
         }
     };
 
@@ -418,12 +439,13 @@ namespace {
               void* pServer, HSteamPipe hPipe,
               CUtlBuffer* pRead, CUtlBuffer* pWrite)
     {
-        if (pRead->TellPut() >= IPC_HEADER_SIZE) {
+        if (pRead && pRead->TellPut() >= IPC_HEADER_SIZE) {
             const auto* raw = pRead->Base();
-            if (raw[OFFSET_CMD] == static_cast<uint8_t>(EIPCCommand::InterfaceCall)) {
+            if (raw && raw[OFFSET_CMD] == static_cast<uint8_t>(EIPCCommand::InterfaceCall)) {
                 const auto iface = static_cast<EIPCInterface>(raw[OFFSET_INTERFACE_ID]);
                 if (iface == EIPCInterface::IClientRemoteStorage) {
-                    uint32_t fHash = *reinterpret_cast<const uint32_t*>(raw + OFFSET_FUNC_HASH);
+                    uint32_t fHash = 0;
+                    std::memcpy(&fHash, raw + OFFSET_FUNC_HASH, sizeof(fHash));
                     // Resolve targeted OnlineFix AppID for pipe process before active route fallback.
                     AppId_t real = 0;
                     if (auto* pClient = PipeForHandle(pServer, hPipe)) {
@@ -546,17 +568,29 @@ namespace {
         }
         StatsGuard guard(f.realAppIdCall, hPipe, targetAppId);
 
-        // Rewrite any 480 AppID parameters in incoming request to targetAppId for scoped interfaces
+        // Rewrite any 480 AppID parameters in incoming request to targetAppId for scoped interfaces.
+        // Exclude RemoteStorage and Screenshots where binary payloads (save files, raw screenshots)
+        // could contain arbitrary byte sequences matching 480. Bound scan to RPC parameter header space.
         if (f.realAppIdCall && targetAppId != 0 && targetAppId != kOnlineFixAppId && pRead) {
-            const int32 bufSize = pRead->TellPut();
-            if (bufSize >= IPC_ARGS_OFFSET + 4) {
-                uint8_t* rawBuf = pRead->Base();
-                for (int32 off = IPC_ARGS_OFFSET; off + 4 <= bufSize; off += 4) {
-                    uint32_t* pVal = reinterpret_cast<uint32_t*>(rawBuf + off);
-                    if (*pVal == kOnlineFixAppId) {
-                        *pVal = targetAppId;
-                        LOG_IPCRTR_DEBUG("\"evt\" \"IpcArgAppIdRewrite\" \"off\" {} \"from\" 480 \"to\" {}",
-                            off, targetAppId);
+            const auto* rawBase = pRead->Base();
+            if (rawBase && pRead->TellPut() >= IPC_HEADER_SIZE) {
+                const auto iface = static_cast<EIPCInterface>(rawBase[OFFSET_INTERFACE_ID]);
+                if (iface != EIPCInterface::IClientRemoteStorage && iface != EIPCInterface::IClientScreenshots) {
+                    const int32 bufSize = pRead->TellPut();
+                    const int32 maxScan = (std::min)(bufSize, IPC_ARGS_OFFSET + 64);
+                    if (maxScan >= IPC_ARGS_OFFSET + 4) {
+                        uint8_t* rawBuf = pRead->Base();
+                        if (rawBuf) {
+                            for (int32 off = IPC_ARGS_OFFSET; off + 4 <= maxScan; off += 4) {
+                                uint32_t val = 0;
+                                std::memcpy(&val, rawBuf + off, sizeof(val));
+                                if (val == kOnlineFixAppId) {
+                                    std::memcpy(rawBuf + off, &targetAppId, sizeof(targetAppId));
+                                    LOG_IPCRTR_DEBUG("\"evt\" \"IpcArgAppIdRewrite\" \"off\" {} \"from\" 480 \"to\" {}",
+                                        off, targetAppId);
+                                }
+                            }
+                        }
                     }
                 }
             }

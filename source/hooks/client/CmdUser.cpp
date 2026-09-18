@@ -267,6 +267,7 @@ namespace CmdUser::Tickets {
     //  IPC-USER  Handler: IClientUser::GetAppOwnershipTicketExtendedData
     void OnGetOwnershipTicketExtended(CSteamPipeClient* pipe, CUtlBuffer* pRead, CUtlBuffer* pWrite)
     {
+        if (!pRead || !pRead->Base()) return;
         const uint8_t* reqData = pRead->Base();
         const int32  reqSize = pRead->m_Put;
         LOG_USRCMD_INFO("\"handler\" \"GetAppOwnershipTicketExtendedData\" \"size\" {}", reqSize);
@@ -275,8 +276,10 @@ namespace CmdUser::Tickets {
             return;
         }
         const uint8_t* args = reqData + IPC_ARGS_OFFSET;
-        const uint32 reqAppID   = *reinterpret_cast<const uint32*>(args);
-        const int32  reqBufSize = *reinterpret_cast<const int32*>(args + 4);
+        uint32 reqAppID = 0;
+        int32 reqBufSize = 0;
+        std::memcpy(&reqAppID, args, sizeof(reqAppID));
+        std::memcpy(&reqBufSize, args + 4, sizeof(reqBufSize));
         if (reqBufSize <= 0) {
             LOG_USRCMD_WARN("\"handler\" \"GetAppOwnershipTicketExtendedData\" \"appId\" {} \"bufSize\" {} \"invalid-buffer\" 1",
                             reqAppID, reqBufSize);
@@ -404,7 +407,7 @@ namespace CmdUser::Utils {
         const uint32 pipeId = pipe ? pipe->m_hSteamPipe : 0;
         const uint32 pid = pipe ? pipe->m_clientPID : 0;
 
-        if (!pWrite || pWrite->m_Put < 5) {
+        if (!pWrite || pWrite->m_Put < 5 || !pWrite->Base()) {
             LOG_IPCRTR_WARN("IClientUtils::GetAppID legacy routeMode={} pipe=0x{:08X} pid={} writeSize={} action=skip-too-small",
                             SteamStubAuto::IsActive() ? "steamstub-auto" : SteamCapture::OnlineFixRouteModeName(mode),
                             pipeId, pid, pWrite ? pWrite->m_Put : 0);
@@ -415,7 +418,8 @@ namespace CmdUser::Utils {
         AppId_t realAppId = SteamStubAuto::IsActive()
             ? SteamStubAuto::RealAppId()
             : (pidReal ? pidReal : SteamCapture::ResolveAppId());
-        AppId_t current = *reinterpret_cast<const AppId_t*>(pWrite->Base() + 1);
+        AppId_t current = 0;
+        std::memcpy(&current, pWrite->Base() + 1, sizeof(current));
         AppId_t finalAppId = current;
         bool changed = false;
 
@@ -423,7 +427,7 @@ namespace CmdUser::Utils {
             && current != realAppId
             && current == kOnlineFixAppId) {
             finalAppId = realAppId;
-            *reinterpret_cast<AppId_t*>(pWrite->Base() + 1) = finalAppId;
+            std::memcpy(pWrite->Base() + 1, &finalAppId, sizeof(finalAppId));
             changed = true;
         }
 
@@ -516,17 +520,17 @@ namespace CmdUser::Utils {
     void OnGetAPICallResult(
         CSteamPipeClient* pipe, CUtlBuffer* pRead, CUtlBuffer* pWrite)
     {
-        if (pRead->m_Put < IPC_ARGS_OFFSET + sizeof(ApiCallRequest)) return;
+        if (!pRead || !pRead->Base() || pRead->m_Put < IPC_ARGS_OFFSET + sizeof(ApiCallRequest)) return;
 
-        const auto* req = reinterpret_cast<const ApiCallRequest*>(
-            pRead->Base() + IPC_ARGS_OFFSET);
+        ApiCallRequest req{};
+        std::memcpy(&req, pRead->Base() + IPC_ARGS_OFFSET, sizeof(req));
 
         AppId_t appId = SteamCapture::GetAppIDForCurrentPipe();
         LOG_USRCMD_DEBUG("\"handler\" \"GetAPICallResult\" \"hCall\" \"0x{:016X}\" \"appId\" {} \"cb\" {} \"size\" {}",
-                  req->hCall, appId, req->iCallback, req->cbCallback);
+                  req.hCall, appId, req.iCallback, req.cbCallback);
         for (auto& entry : kCallbackHandlers) {
-            if (entry.callbackId == static_cast<uint32_t>(req->iCallback)) {
-                entry.handler(pipe, pWrite, req->hCall, req->cbCallback);
+            if (entry.callbackId == static_cast<uint32_t>(req.iCallback)) {
+                entry.handler(pipe, pWrite, req.hCall, req.cbCallback);
                 return;
             }
         }

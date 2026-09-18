@@ -37,7 +37,8 @@ namespace {
 
 
         uint8_t* base = pWrite->m_Memory.m_pMemory;
-        AppId_t reported = *reinterpret_cast<const AppId_t*>(base + 1);
+        AppId_t reported = 0;
+        std::memcpy(&reported, base + 1, sizeof(reported));
         // Support real AppId calculation with per-PID lookup fallback for multi-game OnlineFix.
         AppId_t pidReal = SteamCapture::GetOnlineFixAppForPid(pid);
         AppId_t real = steamStubRoute ? SteamStubAuto::RealAppId() : (pidReal ? pidReal : OnlineFixRealAppId());
@@ -49,7 +50,7 @@ namespace {
             && real != 0
             && real != kOnlineFixAppId) {
             finalAppId = real;
-            *reinterpret_cast<AppId_t*>(base + 1) = finalAppId;
+            std::memcpy(base + 1, &finalAppId, sizeof(finalAppId));
             changed = true;
             LOG_USRCMD_INFO("IClientUtils::GetAppID: {} -> {} routeMode={}",
                             reported, finalAppId, routeName);
@@ -71,16 +72,17 @@ namespace {
     //  pRead:  [0..3]=hCall, [4..7]=cubMax, [8..11]=pbCallFailed, [12..15]=hSteamUser
     //  pWrite: [0..3]=result (bool), [4..7]=cubCopied, [8..]=call data
     void Post_GetAPICallResult(CSteamPipeClient* pipe, CUtlBuffer* pRead, CUtlBuffer* pWrite) {
-        if (!pRead || !pWrite) return;
+        if (!pRead || !pWrite || !pRead->m_Memory.m_pMemory || !pWrite->m_Memory.m_pMemory) return;
         if (pRead->m_Put < 16 || pWrite->m_Put < 8) return;
 
         const uint8_t* args = pRead->m_Memory.m_pMemory;
-        SteamAPICall_t hCall = *reinterpret_cast<const SteamAPICall_t*>(args);
-        uint32_t cubMax = *reinterpret_cast<const uint32_t*>(args + 4);
+        SteamAPICall_t hCall = 0;
+        std::memcpy(&hCall, args, sizeof(hCall));
 
         uint8_t* resp = pWrite->m_Memory.m_pMemory;
         bool result = (resp[0] != 0);
-        uint32_t cubCopied = *reinterpret_cast<const uint32_t*>(resp + 4);
+        uint32_t cubCopied = 0;
+        std::memcpy(&cubCopied, resp + 4, sizeof(cubCopied));
 
         if (!result || cubCopied < 4) return;
 
