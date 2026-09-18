@@ -68,11 +68,12 @@ namespace SteamCapture {
     bool OnlineFixRouteIsSteamStubAuto();
     const char* OnlineFixRouteModeName(OnlineFixRouteMode mode);
 
-    // Scoped real-appid override for IClientUserStats traffic. Increments
-    // a thread-local depth counter on active=true and decrements on
+    // Scoped real-appid override for content / stats / UGC / storage traffic.
+    // Increments a thread-local depth counter on active=true and decrements on
     // active=false (underflow guarded). The GetAppIDForCurrentPipe detour
     // returns the real appid only while depth > 0 AND OnlineFix is active
     // AND the original engine call returned the Spacewar masquerade.
+    void SetRealAppIdContext(bool active);
     void SetUserStatsContext(bool active);
 
     // Pipe-scoped fine gate paired with the thread-local depth counter.

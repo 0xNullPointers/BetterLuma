@@ -77,7 +77,7 @@ namespace {
     thread_local AppId_t   t_StatsScopeAppId{0};
     std::mutex             g_pipeAppIdMutex;
     std::unordered_map<HSteamPipe, AppId_t> g_pipeToAppId;
-    thread_local uint32   g_userStatsAppIdOverrideDepth = 0;
+    thread_local uint32   g_realAppIdOverrideDepth = 0;
     std::mutex                               g_gameNameCacheMutex;
     std::unordered_map<AppId_t, std::string> g_GameNameCache;
     static std::vector<CaptureEntry> g_captures;
@@ -216,16 +216,16 @@ namespace {
 
     // ── GetAppIDForCurrentPipe Detours hook ───────────────────────────────────
     // Captures g_steamEngine (RCX = this) on first call and applies the scoped
-    // real-appid override for IClientUserStats traffic.
+    // real-appid override for content / stats / UGC / storage traffic.
     //
     // The override returns the real appid only when ALL of:
-    //   1. SetUserStatsContext(true) is currently on the stack on this thread
-    //      (g_userStatsAppIdOverrideDepth > 0)
+    //   1. SetRealAppIdContext(true) is currently on the stack on this thread
+    //      (g_realAppIdOverrideDepth > 0)
     //   2. A route is active for this session (manual OnlineFix or SteamStub)
     //   3. The engine itself reports the Spacewar masquerade (appid == 480)
     //
     // Every other call path returns the engine's value untouched. That keeps
-    // the lobby / friends / controller / RemoteStorage paths byte-identical
+    // the matchmaking / SDR / networking / auth ticket paths byte-identical
     // to the existing 480 behaviour. The depth counter is thread-local so
     // concurrent IPC pipes don't bleed into each other.
     LM_HOOK(GetAppIDForCurrentPipe, AppId_t, void* pEngine) {
@@ -238,11 +238,11 @@ namespace {
         }
         AppId_t appid = oGetAppIDForCurrentPipe(pEngine);
         AppId_t real = ActiveRouteRealAppIdInternal();
-        // OnlineFix 480 route handling: return 480 for all pipe traffic and only expose real in stats scope.
-        // Route through 480 for OnlineFix networking/lobbies while stats scope returns real appid.
+        // OnlineFix 480 route handling: return 480 for all pipe traffic and only expose real in content/stats scope.
+        // Route through 480 for OnlineFix networking/lobbies while scoped calls return real appid.
         if (real != 0 && (appid == real || appid == kOnlineFixAppId || SteamCapture::IsOnlineFixApp(appid))) {
-            if (g_userStatsAppIdOverrideDepth > 0) {
-                LOG_MISC_TRACE("GetAppIDForCurrentPipe: stats-scope override {} -> {}",
+            if (g_realAppIdOverrideDepth > 0) {
+                LOG_MISC_TRACE("GetAppIDForCurrentPipe: real-appid scope override {} -> {}",
                                appid, real);
                 return real;
             }
@@ -909,7 +909,7 @@ namespace SteamCapture {
             std::lock_guard<std::mutex> lock(g_pipeAppIdMutex);
             g_pipeToAppId.clear();
         }
-        g_userStatsAppIdOverrideDepth = 0;
+        g_realAppIdOverrideDepth = 0;
         g_steamEngine.store(nullptr, std::memory_order_release);
         {
             std::lock_guard<std::mutex> lock(g_gameNameCacheMutex);
@@ -1143,14 +1143,18 @@ namespace SteamCapture {
         return "unknown";
     }
 
-    void SetUserStatsContext(bool active) {
+    void SetRealAppIdContext(bool active) {
         if (active) {
-            ++g_userStatsAppIdOverrideDepth;
-        } else if (g_userStatsAppIdOverrideDepth > 0) {
-            --g_userStatsAppIdOverrideDepth;
+            ++g_realAppIdOverrideDepth;
+        } else if (g_realAppIdOverrideDepth > 0) {
+            --g_realAppIdOverrideDepth;
         } else {
-            LOG_MISC_WARN("SetUserStatsContext(false) called with depth=0; clamping");
+            LOG_MISC_WARN("SetRealAppIdContext(false) called with depth=0; clamping");
         }
+    }
+
+    void SetUserStatsContext(bool active) {
+        SetRealAppIdContext(active);
     }
 
     void EnterStatsScope(HSteamPipe pipe, AppId_t appId) {
@@ -1245,16 +1249,12 @@ namespace SteamCapture {
         TryStartupInjection(reason);
     }
 
-    static std::atomic_bool g_networkingSocketsActive{false};
-
     void NotifyNetworkingSocketsUsed() {
-        bool expected = false;
-        if (OnlineFixRealAppId() && g_networkingSocketsActive.compare_exchange_strong(expected, true))
-            LOG_MISC_INFO("NetworkingSockets active: GetAppID now reports 480 for cert match");
+        // No-op: IClientUtils::GetAppID consistently reports the genuine AppID to the game process.
     }
 
     bool ShouldReportOnlineFixAppId() {
-        return OnlineFixRealAppId() != 0 && g_networkingSocketsActive.load(std::memory_order_acquire);
+        return false;
     }
 
     void NotifyLicenseChanged() {

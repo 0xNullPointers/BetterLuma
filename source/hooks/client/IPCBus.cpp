@@ -60,10 +60,35 @@ namespace IPCBus::Registry {
         return !pipe || ((pipe->m_hSteamPipe & 0xFFFF) <= 2);
     }
 
+    // Determines if an IPC interface should resolve the game's genuine AppID
+    // rather than the Spacewar (480) multiplayer masquerade.
+    //
+    // Multiplayer interfaces (Matchmaking, SDR sockets, P2P, GameServer, Auth Tickets)
+    // strictly remain on AppID 480 so Valve backend matchmaking and connection
+    // handshakes succeed.
+    //
+    // Content and local subsystems (UserStats, RemoteStorage, UGC, Apps, Screenshots,
+    // Inventory) resolve the genuine AppID so Workshop mods, Cloud Saves, DLC ownership,
+    // achievements, and screenshots bind to the actual title.
+    static constexpr bool ShouldRouteInterfaceToRealAppId(EIPCInterface iface) {
+        switch (iface) {
+        case EIPCInterface::IClientUserStats:      // 11 - Achievements, player stats, leaderboards
+        case EIPCInterface::IClientRemoteStorage:  // 13 - Cloud saves, legacy UGC / workshop (L4D2)
+        case EIPCInterface::IClientAppManager:    // 17 - DLC enabled state, install state
+        case EIPCInterface::IClientUGC:            // 32 - Modern Steam Workshop queries & downloads
+        case EIPCInterface::IClientApps:           // 8  - DLC installed checks, install dir
+        case EIPCInterface::IClientScreenshots:    // 23 - In-game screenshots
+        case EIPCInterface::IClientInventory:      // 39 - In-game inventory
+            return true;
+        default:
+            return false;
+        }
+    }
+
     struct CallFrame {
-        CSteamPipeClient*       pipe    = nullptr;
-        const IpcHandlerEntry*  handler = nullptr;
-        bool                    statsCall = false;
+        CSteamPipeClient*       pipe          = nullptr;
+        const IpcHandlerEntry*  handler       = nullptr;
+        bool                    realAppIdCall = false;
         bool                    Good() const { return pipe && handler; }
     };
 
@@ -92,16 +117,18 @@ namespace IPCBus::Registry {
                 PipeWatch::TouchPipe(f.pipe);
                 const auto iface = static_cast<EIPCInterface>(raw[OFFSET_INTERFACE_ID]);
                 const uint32_t fHash = *reinterpret_cast<const uint32_t*>(raw + OFFSET_FUNC_HASH);
-                f.statsCall = (iface == EIPCInterface::IClientUserStats);
+                f.realAppIdCall = ShouldRouteInterfaceToRealAppId(iface);
                 f.handler = Lookup(iface, fHash);
                 if (f.handler) {
-                    LOG_IPCRTR_INFO("\"cmd\" \"InterfaceCall\" \"name\" \"{}\" \"pipe\" \"{}\" \"realAppId\" {} \"AppId\" {}",
+                    LOG_IPCRTR_INFO("\"cmd\" \"InterfaceCall\" \"name\" \"{}\" \"pipe\" \"{}\" \"realAppId\" {} \"AppId\" {} \"scopedReal\" {}",
                         f.handler->name, f.pipe->DebugString(),
-                        SteamCapture::ResolveAppId(), SteamCapture::GetAppIDForCurrentPipe());
+                        SteamCapture::ResolveAppId(), SteamCapture::GetAppIDForCurrentPipe(),
+                        f.realAppIdCall);
                 } else {
-                    LOG_IPCRTR_INFO("\"cmd\" \"InterfaceCall\" \"iface\" \"{}\" \"hash\" \"0x{:08X}\" \"pipe\" \"{}\" \"realAppId\" {} \"AppId\" {}",
+                    LOG_IPCRTR_INFO("\"cmd\" \"InterfaceCall\" \"iface\" \"{}\" \"hash\" \"0x{:08X}\" \"pipe\" \"{}\" \"realAppId\" {} \"AppId\" {} \"scopedReal\" {}",
                         EIPCInterfaceName(iface), fHash, f.pipe->DebugString(),
-                        SteamCapture::ResolveAppId(), SteamCapture::GetAppIDForCurrentPipe());
+                        SteamCapture::ResolveAppId(), SteamCapture::GetAppIDForCurrentPipe(),
+                        f.realAppIdCall);
                 }
             } else {
                 LOG_IPCRTR_INFO("\"cmd\" \"{}\" \"pipe\" \"{}\"", EIPCCommandName(ec), f.pipe->DebugString());
@@ -115,21 +142,21 @@ namespace IPCBus::Registry {
 namespace {
     using namespace IPCBus::Registry;
 
-    // RAII guard: enters stats scope on construction, leaves on destruction.
-    // only activates when statsCall is true - no-ops otherwise.
+    // RAII guard: enters real AppID scope on construction, leaves on destruction.
+    // Only activates when doActivate is true - no-ops otherwise.
     struct StatsGuard {
         bool m_active;
         HSteamPipe m_pipe;
         StatsGuard(bool doActivate, HSteamPipe pipe, AppId_t appId = 0) : m_active(doActivate), m_pipe(pipe) {
             if (m_active) {
-                SteamCapture::SetUserStatsContext(true);
+                SteamCapture::SetRealAppIdContext(true);
                 SteamCapture::EnterStatsScope(m_pipe, appId);
             }
         }
         ~StatsGuard() {
             if (m_active) {
                 SteamCapture::LeaveStatsScope();
-                SteamCapture::SetUserStatsContext(false);
+                SteamCapture::SetRealAppIdContext(false);
             }
         }
     };
@@ -395,8 +422,6 @@ namespace {
             const auto* raw = pRead->Base();
             if (raw[OFFSET_CMD] == static_cast<uint8_t>(EIPCCommand::InterfaceCall)) {
                 const auto iface = static_cast<EIPCInterface>(raw[OFFSET_INTERFACE_ID]);
-                if (iface == EIPCInterface::IClientNetworkingSocketsSerialized)
-                    SteamCapture::NotifyNetworkingSocketsUsed();
                 if (iface == EIPCInterface::IClientRemoteStorage) {
                     uint32_t fHash = *reinterpret_cast<const uint32_t*>(raw + OFFSET_FUNC_HASH);
                     // Resolve targeted OnlineFix AppID for pipe process before active route fallback.
@@ -405,7 +430,10 @@ namespace {
                         real = SteamCapture::GetOnlineFixAppForPid(pClient->m_clientPID);
                     }
                     if (!real) real = SteamCapture::ActiveRouteRealAppId();
-                    if (real && (fHash == 0x376E83D6 || fHash == 0xC69A678D || fHash == 0xA0F6FDBD)) {
+                    const bool isFileExists = (fHash == 0x376E83D6);
+                    const bool isGetFileSize = (fHash == 0x376E83D3 || fHash == 0xC69A678D);
+                    const bool isFileRead = (fHash == 0xEBAB17AA || fHash == 0xA0F6FDBD);
+                    if (real && (isFileExists || isGetFileSize || isFileRead)) {
                         DWORD steamId32 = 0;
                         HKEY hKey;
                         if (RegOpenKeyExA(HKEY_CURRENT_USER,
@@ -447,7 +475,7 @@ namespace {
                                         return (pWrite->*pWrite->m_PutOverflowFunc)(need);
                                     };
 
-                                if (fHash == 0x376E83D6) {  // FileExists
+                                if (isFileExists) {  // FileExists
                                     VerifiedSaveFile vsf;
                                     if (OpenAndVerifySecureSaveFile(savePath, SteamInstallPath, steamId32, real, vsf)) {
                                         if (ensureCap(14)) {
@@ -464,7 +492,7 @@ namespace {
                                     } else {
                                         LOG_IPCRTR_INFO("\"evt\" \"SaveInject\" \"fn\" \"FileExists\" \"path\" \"{}\" \"result\" \"not-found\"", savePath);
                                     }
-                                } else if (fHash == 0xC69A678D) {  // GetFileSize
+                                } else if (isGetFileSize) {  // GetFileSize
                                     VerifiedSaveFile vsf;
                                     if (OpenAndVerifySecureSaveFile(savePath, SteamInstallPath, steamId32, real, vsf)) {
                                         DWORD fileSize = vsf.fileSize;
@@ -479,7 +507,7 @@ namespace {
                                             return true;
                                         }
                                     }
-                                } else if (fHash == 0xA0F6FDBD) {  // FileRead
+                                } else if (isFileRead) {  // FileRead
                                     VerifiedSaveFile vsf;
                                     if (OpenAndVerifySecureSaveFile(savePath, SteamInstallPath, steamId32, real, vsf)) {
                                         DWORD fileSize = vsf.fileSize;
@@ -509,11 +537,30 @@ namespace {
         }
 
         auto f = SetupFrame(pServer, hPipe, pRead);
-        AppId_t statsAppId = 0;
-        if (f.statsCall && f.pipe) {
-            statsAppId = SteamCapture::GetOnlineFixAppForPid(f.pipe->m_clientPID);
+        AppId_t targetAppId = 0;
+        if (f.realAppIdCall && f.pipe) {
+            targetAppId = SteamCapture::GetOnlineFixAppForPid(f.pipe->m_clientPID);
         }
-        StatsGuard guard(f.statsCall, hPipe, statsAppId);
+        if (!targetAppId && f.realAppIdCall) {
+            targetAppId = SteamCapture::ActiveRouteRealAppId();
+        }
+        StatsGuard guard(f.realAppIdCall, hPipe, targetAppId);
+
+        // Rewrite any 480 AppID parameters in incoming request to targetAppId for scoped interfaces
+        if (f.realAppIdCall && targetAppId != 0 && targetAppId != kOnlineFixAppId && pRead) {
+            const int32 bufSize = pRead->TellPut();
+            if (bufSize >= IPC_ARGS_OFFSET + 4) {
+                uint8_t* rawBuf = pRead->Base();
+                for (int32 off = IPC_ARGS_OFFSET; off + 4 <= bufSize; off += 4) {
+                    uint32_t* pVal = reinterpret_cast<uint32_t*>(rawBuf + off);
+                    if (*pVal == kOnlineFixAppId) {
+                        *pVal = targetAppId;
+                        LOG_IPCRTR_DEBUG("\"evt\" \"IpcArgAppIdRewrite\" \"off\" {} \"from\" 480 \"to\" {}",
+                            off, targetAppId);
+                    }
+                }
+            }
+        }
 
         const bool ok = oIPCProcessMessage(pServer, hPipe, pRead, pWrite);
 

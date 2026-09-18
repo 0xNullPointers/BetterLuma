@@ -411,20 +411,17 @@ namespace CmdUser::Utils {
             return;
         }
 
-        // Restore OnGetAppID resolution to cdf5c42 using active route real AppId.
+        AppId_t pidReal = SteamCapture::GetOnlineFixAppForPid(pid);
         AppId_t realAppId = SteamStubAuto::IsActive()
             ? SteamStubAuto::RealAppId()
-            : SteamCapture::ResolveAppId();
+            : (pidReal ? pidReal : SteamCapture::ResolveAppId());
         AppId_t current = *reinterpret_cast<const AppId_t*>(pWrite->Base() + 1);
         AppId_t finalAppId = current;
         bool changed = false;
 
         if (realAppId
-            && current != realAppId) {
-            // Keep 480 when networking sockets / P2P is active for cert match.
-            if (SteamCapture::ShouldReportOnlineFixAppId()) {
-                return;
-            }
+            && current != realAppId
+            && current == kOnlineFixAppId) {
             finalAppId = realAppId;
             *reinterpret_cast<AppId_t*>(pWrite->Base() + 1) = finalAppId;
             changed = true;

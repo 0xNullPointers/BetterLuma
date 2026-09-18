@@ -35,11 +35,6 @@ namespace {
             return;
         }
 
-        if (ShouldReportOnlineFixAppId()) {
-            LOG_IPCRTR_INFO("IClientUtils::GetAppID: P2P active, reporting 480 routeMode={}",
-                            routeName);
-            return;
-        }
 
         uint8_t* base = pWrite->m_Memory.m_pMemory;
         AppId_t reported = *reinterpret_cast<const AppId_t*>(base + 1);
@@ -49,7 +44,7 @@ namespace {
         AppId_t finalAppId = reported;
         bool changed = false;
 
-        if ((mode != OnlineFixRouteMode::None || steamStubRoute)
+        if ((mode != OnlineFixRouteMode::None || steamStubRoute || pidReal != 0)
             && reported == kOnlineFixAppId
             && real != 0
             && real != kOnlineFixAppId) {

@@ -74,6 +74,10 @@ namespace IpcDispatch {
                 {"IClientUtils",           EIPCInterface::IClientUtils},
                 {"IClientAppManager",      EIPCInterface::IClientAppManager},
                 {"IClientRemoteStorage",   EIPCInterface::IClientRemoteStorage},
+                {"IClientUGC",             EIPCInterface::IClientUGC},
+                {"IClientApps",            EIPCInterface::IClientApps},
+                {"IClientScreenshots",     EIPCInterface::IClientScreenshots},
+                {"IClientInventory",       EIPCInterface::IClientInventory},
             };
             auto it = std::find_if(std::begin(kIfaceMap), std::end(kIfaceMap),
                 [&](auto& p) { return std::strcmp(p.first, entry.ifaceName.c_str()) == 0; });
