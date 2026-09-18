@@ -135,6 +135,9 @@ add_library(BetterLuma SHARED
     hooks/client/IpcHandlers_ISteamUser.cpp
     hooks/client/IpcHandlers_ISteamUtils.cpp
     hooks/client/DenuvoAuthenticator.cpp
+    hooks/client/GlobalAchievementHooks.cpp
+
+    stats/GlobalAchievementManager.cpp
 
     hooks/capture/RuntimeCapture.cpp
 

@@ -13,6 +13,8 @@
 #include "runtime/HookStatus.h"
 #include "runtime/VehUtil.h"
 #include "config/LuaLoader.h"
+#include "hooks/client/StringFind.h"
+#include "stats/GlobalAchievementManager.h"
 #include "steam_messages.pb.h"
 
 #include <psapi.h>
@@ -47,8 +49,9 @@ namespace {
     inline GetTopManager_t       oGetTopManager       = nullptr;
     inline RepeatedFieldUint32_Add_t oRepeatedFieldUint32_Add = nullptr;
 
-    // The CSteamUIAppController singleton used as the first argument to
-    // MarkAppChange. Captured from the MarkAppChange hook below.
+    // The CUpdateManager singleton instance used as the `this` argument to
+    // MarkAppChange. Resolved in CoreHook from callsites in .text, or captured
+    // from native calls in hkMarkAppChange.
     inline void* g_pAppChangeSource = nullptr;
 
     // ── Removal queue ──────────────────────────────────────────
@@ -166,11 +169,15 @@ namespace {
         return true;
     }
 
-    //  STEAMUI  MarkAppChange: capture the controller source on first call
-    // for use by the RunFrame drain hook.
+    //  STEAMUI  MarkAppChange: member function of CUpdateManager.
+    // Captures / validates g_pAppChangeSource for the RunFrame drain hook.
     LM_HOOK(MarkAppChange, void*, void* pSource, AppId_t appId, uint32 flags)
     {
-        if (!g_pAppChangeSource) g_pAppChangeSource = pSource;
+        if (pSource && !g_pAppChangeSource) {
+            g_pAppChangeSource = pSource;
+            LOG_STEAMUICH_INFO("Captured g_pAppChangeSource (CUpdateManager) @ 0x{:X} via hkMarkAppChange",
+                               reinterpret_cast<uintptr_t>(pSource));
+        }
         return oMarkAppChange(pSource, appId, flags);
     }
 
@@ -203,6 +210,74 @@ namespace {
             LOG_STEAMUICH_DEBUG("BuildCompleteAppOverviewChange: appended {} removed_appid entries", snapshot.size());
         }
         return result;
+    }
+
+    //  STEAMUI  SerializeAchievements: ensure global percentages loaded flag is set
+    using FindAppStats_t = int(__fastcall*)(void* pMap, const AppId_t* pAppId);
+    inline FindAppStats_t oFindAppStats = nullptr;
+    inline size_t g_appStatsMapOffset   = 0x6a8;
+    inline size_t g_appStatsArrayOffset = 0x6d8;
+
+    static void TryMarkStatsLoaded(void* pController, AppId_t appId) {
+        if (!pController || appId == 0 || !oFindAppStats) return;
+        __try {
+            void* pMap = static_cast<uint8_t*>(pController) + g_appStatsMapOffset;
+            int index = oFindAppStats(pMap, &appId);
+            if (index >= 0) {
+                uint8_t* pArray = *reinterpret_cast<uint8_t**>(static_cast<uint8_t*>(pController) + g_appStatsArrayOffset);
+                if (pArray) {
+                    uint8_t* pStatsEntry = pArray + 8 + (static_cast<size_t>(index) * 0x50);
+                    pStatsEntry[0x20] = 0; // bLoading = false
+                    pStatsEntry[0x21] = 1; // bUserStatsLoaded = true
+                    pStatsEntry[0x22] = 1; // bGlobalStatsLoaded = true
+                }
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+
+    static AppId_t SafeGetAppId(void* pApp) {
+        if (!pApp) return 0;
+        AppId_t appId = 0;
+        __try {
+            void** vfptr = *reinterpret_cast<void***>(pApp);
+            if (vfptr && vfptr[0]) {
+                auto pfnGetAppID = reinterpret_cast<AppId_t(__fastcall*)(void*)>(vfptr[0]);
+                appId = pfnGetAppID(pApp);
+            }
+            if (appId == 0) {
+                uint64_t gameId = *reinterpret_cast<const uint64_t*>(static_cast<const uint8_t*>(pApp) + 8);
+                appId = static_cast<AppId_t>(gameId & 0xFFFFFF);
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            appId = 0;
+        }
+        return appId;
+    }
+
+    LM_HOOK(SerializeAchievements, void*, void* pController, void* pWriter, void* pApp)
+    {
+        if (pController && pApp)
+        {
+            AppId_t appId = SafeGetAppId(pApp);
+            if (appId != 0)
+            {
+                uint64_t gameId = 0;
+                __try {
+                    gameId = *reinterpret_cast<const uint64_t*>(static_cast<const uint8_t*>(pApp) + 8);
+                } __except (EXCEPTION_EXECUTE_HANDLER) {
+                    gameId = appId;
+                }
+                GlobalAchievementManager::EnsureLoaded(appId, gameId);
+
+                if (GlobalAchievementManager::HasData(appId))
+                {
+                    TryMarkStatsLoaded(pController, appId);
+                }
+            }
+        }
+
+        return oSerializeAchievements(pController, pWriter, pApp);
     }
 
     //  STEAMUI  CSteamUIAppControllerRunFrame: drain live library queues
@@ -317,6 +392,158 @@ namespace SteamUI {
                 HookStatus::RecordMissed("LoadModuleWithPath");
             }
         }
+        {
+            void* _p_ = ByteSearch(hSteamUI, "FillInAppOverview");
+            if (_p_) {
+                LOG_STEAMUICH_DEBUG("Hook: FillInAppOverview attached @ 0x{:X}",
+                                    reinterpret_cast<uintptr_t>(_p_));
+                oFillInAppOverview = reinterpret_cast<FillInAppOverview_t>(_p_);
+                DetourAttach(reinterpret_cast<PVOID*>(&oFillInAppOverview),
+                             reinterpret_cast<PVOID>(hkFillInAppOverview));
+                HookStatus::RecordInstalled();
+            } else {
+                LOG_STEAMUICH_WARN("Hook: FillInAppOverview skipped (TOML entry missing)");
+                HookStatus::RecordMissed("FillInAppOverview");
+            }
+        }
+        {
+            void* _p_ = ByteSearch(hSteamUI, "BuildCompleteAppOverviewChange");
+            if (_p_) {
+                LOG_STEAMUICH_DEBUG("Hook: BuildCompleteAppOverviewChange attached @ 0x{:X}",
+                                    reinterpret_cast<uintptr_t>(_p_));
+                oBuildCompleteAppOverviewChange = reinterpret_cast<BuildCompleteAppOverviewChange_t>(_p_);
+                DetourAttach(reinterpret_cast<PVOID*>(&oBuildCompleteAppOverviewChange),
+                             reinterpret_cast<PVOID>(hkBuildCompleteAppOverviewChange));
+                HookStatus::RecordInstalled();
+            } else {
+                LOG_STEAMUICH_WARN("Hook: BuildCompleteAppOverviewChange skipped (TOML entry missing)");
+                HookStatus::RecordMissed("BuildCompleteAppOverviewChange");
+            }
+        }
+        {
+            void* _p_ = ByteSearch(hSteamUI, "CSteamUIAppControllerRunFrame");
+            if (_p_) {
+                LOG_STEAMUICH_DEBUG("Hook: CSteamUIAppControllerRunFrame attached @ 0x{:X}",
+                                    reinterpret_cast<uintptr_t>(_p_));
+                oCSteamUIAppControllerRunFrame = reinterpret_cast<CSteamUIAppControllerRunFrame_t>(_p_);
+                DetourAttach(reinterpret_cast<PVOID*>(&oCSteamUIAppControllerRunFrame),
+                             reinterpret_cast<PVOID>(hkCSteamUIAppControllerRunFrame));
+                HookStatus::RecordInstalled();
+            } else {
+                LOG_STEAMUICH_WARN("Hook: CSteamUIAppControllerRunFrame skipped (TOML entry missing)");
+                HookStatus::RecordMissed("CSteamUIAppControllerRunFrame");
+            }
+        }
+        // MarkAppChange hook captures g_pAppChangeSource for RunFrame drain
+        {
+            void* _p_ = ByteSearch(hSteamUI, "MarkAppChange");
+            if (_p_) {
+                LOG_STEAMUICH_DEBUG("Hook: MarkAppChange attached @ 0x{:X}",
+                                    reinterpret_cast<uintptr_t>(_p_));
+                oMarkAppChange = reinterpret_cast<MarkAppChange_t>(_p_);
+                DetourAttach(reinterpret_cast<PVOID*>(&oMarkAppChange),
+                             reinterpret_cast<PVOID>(hkMarkAppChange));
+                HookStatus::RecordInstalled();
+
+                // Dynamically resolve g_pAppChangeSource (&g_UpdateManager) from MarkAppChange callsite in .text
+                if (!g_pAppChangeSource) {
+                    auto baseBytes = reinterpret_cast<const uint8_t*>(hSteamUI);
+                    auto dosHeader = reinterpret_cast<const IMAGE_DOS_HEADER*>(baseBytes);
+                    if (dosHeader->e_magic == IMAGE_DOS_SIGNATURE) {
+                        auto ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS*>(baseBytes + dosHeader->e_lfanew);
+                        if (ntHeaders->Signature == IMAGE_NT_SIGNATURE) {
+                            auto sectionHeader = IMAGE_FIRST_SECTION(ntHeaders);
+                            const uint8_t* textStart = nullptr;
+                            size_t textSize = 0;
+                            uintptr_t dataStart = 0;
+                            uintptr_t dataEnd = 0;
+
+                            for (WORD i = 0; i < ntHeaders->FileHeader.NumberOfSections; ++i) {
+                                if (memcmp(sectionHeader[i].Name, ".text", 5) == 0) {
+                                    textStart = baseBytes + sectionHeader[i].VirtualAddress;
+                                    textSize = sectionHeader[i].Misc.VirtualSize;
+                                } else if (memcmp(sectionHeader[i].Name, ".data", 5) == 0) {
+                                    dataStart = reinterpret_cast<uintptr_t>(baseBytes) + sectionHeader[i].VirtualAddress;
+                                    dataEnd = dataStart + sectionHeader[i].Misc.VirtualSize;
+                                }
+                            }
+
+                            if (textStart && textSize > 5) {
+                                for (size_t i = 0; i < textSize - 5; ++i) {
+                                    if (textStart[i] == 0xE8) {
+                                        int32_t rel = *reinterpret_cast<const int32_t*>(textStart + i + 1);
+                                        const uint8_t* callDest = textStart + i + 5 + rel;
+                                        if (callDest == reinterpret_cast<const uint8_t*>(_p_)) {
+                                            for (size_t back = 1; back <= 32 && i >= back; ++back) {
+                                                size_t pos = i - back;
+                                                if (textStart[pos] == 0x48 && textStart[pos + 1] == 0x8D && textStart[pos + 2] == 0x0D) {
+                                                    int32_t disp = *reinterpret_cast<const int32_t*>(textStart + pos + 3);
+                                                    uintptr_t target = reinterpret_cast<uintptr_t>(textStart + pos + 7 + disp);
+                                                    if (target >= dataStart && target < dataEnd) {
+                                                        g_pAppChangeSource = reinterpret_cast<void*>(target);
+                                                        LOG_STEAMUICH_INFO("Resolve: g_pAppChangeSource (CUpdateManager) bound @ 0x{:X}", target);
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            if (g_pAppChangeSource) break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                LOG_STEAMUICH_WARN("Hook: MarkAppChange skipped (TOML entry missing)");
+                HookStatus::RecordMissed("MarkAppChange");
+            }
+        }
+        {
+            void* pSerialize = StringFind::FindFunction(hSteamUI, "vecAchievedHidden");
+            if (!pSerialize) {
+                pSerialize = StringFind::FindFunction(hSteamUI, "vecHighlight");
+            }
+            if (pSerialize) {
+                LOG_STEAMUICH_DEBUG("Hook: SerializeAchievements attached @ 0x{:X}",
+                                    reinterpret_cast<uintptr_t>(pSerialize));
+                oSerializeAchievements = reinterpret_cast<SerializeAchievements_t>(pSerialize);
+                DetourAttach(reinterpret_cast<PVOID*>(&oSerializeAchievements),
+                             reinterpret_cast<PVOID>(hkSerializeAchievements));
+                HookStatus::RecordInstalled();
+
+                // Scan for the call to FindAppStats inside SerializeAchievements
+                const uint8_t* pCode = reinterpret_cast<const uint8_t*>(pSerialize);
+                for (size_t i = 0; i < 0x100; ++i) {
+                    if (pCode[i] == 0xE8 && pCode[i + 5] == 0x83 && pCode[i + 6] == 0xF8 && pCode[i + 7] == 0xFF) {
+                        int32_t disp = *reinterpret_cast<const int32_t*>(pCode + i + 1);
+                        oFindAppStats = reinterpret_cast<FindAppStats_t>(const_cast<uint8_t*>(pCode + i + 5 + disp));
+                        LOG_STEAMUICH_INFO("Resolve: FindAppStats bound @ 0x{:X}",
+                                            reinterpret_cast<uintptr_t>(oFindAppStats));
+
+                        // Dynamically extract map and array offsets from the surrounding instructions
+                        for (size_t back = 1; back <= 32 && i >= back; ++back) {
+                            if (pCode[i - back] == 0x48 && pCode[i - back + 1] == 0x8D && (pCode[i - back + 2] & 0xC7) == 0x87) {
+                                g_appStatsMapOffset = *reinterpret_cast<const uint32_t*>(pCode + i - back + 3);
+                                LOG_STEAMUICH_DEBUG("Resolve: g_appStatsMapOffset bound to 0x{:X}", g_appStatsMapOffset);
+                                break;
+                            }
+                        }
+                        if (pCode[i + 8] == 0x0F && pCode[i + 9] == 0x84) {
+                            size_t afterJe = i + 14;
+                            if (pCode[afterJe] == 0x48 && pCode[afterJe + 1] == 0x8B && (pCode[afterJe + 2] & 0xC7) == 0x87) {
+                                g_appStatsArrayOffset = *reinterpret_cast<const uint32_t*>(pCode + afterJe + 3);
+                                LOG_STEAMUICH_DEBUG("Resolve: g_appStatsArrayOffset bound to 0x{:X}", g_appStatsArrayOffset);
+                            }
+                        }
+                        break;
+                    }
+                }
+            } else {
+                LOG_STEAMUICH_WARN("Hook: SerializeAchievements skipped (vecAchievedHidden xref missed)");
+                HookStatus::RecordMissed("SerializeAchievements");
+            }
+        }
         LM_TX_COMMIT();
 
         // Helper resolves (no Detours attach, just bind the trampoline slot).
@@ -371,64 +598,6 @@ namespace SteamUI {
             }
         }
 
-        // ── Additional hooks ─────────────────────────────────────────────
-        {
-            void* _p_ = ByteSearch(hSteamUI, "FillInAppOverview");
-            if (_p_) {
-                LOG_STEAMUICH_DEBUG("Hook: FillInAppOverview attached @ 0x{:X}",
-                                    reinterpret_cast<uintptr_t>(_p_));
-                oFillInAppOverview = reinterpret_cast<FillInAppOverview_t>(_p_);
-                DetourAttach(reinterpret_cast<PVOID*>(&oFillInAppOverview),
-                             reinterpret_cast<PVOID>(hkFillInAppOverview));
-                HookStatus::RecordInstalled();
-            } else {
-                LOG_STEAMUICH_WARN("Hook: FillInAppOverview skipped (TOML entry missing)");
-                HookStatus::RecordMissed("FillInAppOverview");
-            }
-        }
-        {
-            void* _p_ = ByteSearch(hSteamUI, "BuildCompleteAppOverviewChange");
-            if (_p_) {
-                LOG_STEAMUICH_DEBUG("Hook: BuildCompleteAppOverviewChange attached @ 0x{:X}",
-                                    reinterpret_cast<uintptr_t>(_p_));
-                oBuildCompleteAppOverviewChange = reinterpret_cast<BuildCompleteAppOverviewChange_t>(_p_);
-                DetourAttach(reinterpret_cast<PVOID*>(&oBuildCompleteAppOverviewChange),
-                             reinterpret_cast<PVOID>(hkBuildCompleteAppOverviewChange));
-                HookStatus::RecordInstalled();
-            } else {
-                LOG_STEAMUICH_WARN("Hook: BuildCompleteAppOverviewChange skipped (TOML entry missing)");
-                HookStatus::RecordMissed("BuildCompleteAppOverviewChange");
-            }
-        }
-        {
-            void* _p_ = ByteSearch(hSteamUI, "CSteamUIAppControllerRunFrame");
-            if (_p_) {
-                LOG_STEAMUICH_DEBUG("Hook: CSteamUIAppControllerRunFrame attached @ 0x{:X}",
-                                    reinterpret_cast<uintptr_t>(_p_));
-                oCSteamUIAppControllerRunFrame = reinterpret_cast<CSteamUIAppControllerRunFrame_t>(_p_);
-                DetourAttach(reinterpret_cast<PVOID*>(&oCSteamUIAppControllerRunFrame),
-                             reinterpret_cast<PVOID>(hkCSteamUIAppControllerRunFrame));
-                HookStatus::RecordInstalled();
-            } else {
-                LOG_STEAMUICH_WARN("Hook: CSteamUIAppControllerRunFrame skipped (TOML entry missing)");
-                HookStatus::RecordMissed("CSteamUIAppControllerRunFrame");
-            }
-        }
-        // MarkAppChange hook captures g_pAppChangeSource for RunFrame drain
-        {
-            void* _p_ = ByteSearch(hSteamUI, "MarkAppChange");
-            if (_p_) {
-                LOG_STEAMUICH_DEBUG("Hook: MarkAppChange attached @ 0x{:X}",
-                                    reinterpret_cast<uintptr_t>(_p_));
-                oMarkAppChange = reinterpret_cast<MarkAppChange_t>(_p_);
-                DetourAttach(reinterpret_cast<PVOID*>(&oMarkAppChange),
-                             reinterpret_cast<PVOID>(hkMarkAppChange));
-                HookStatus::RecordInstalled();
-            } else {
-                LOG_STEAMUICH_WARN("Hook: MarkAppChange skipped (TOML entry missing)");
-                HookStatus::RecordMissed("MarkAppChange");
-            }
-        }
         {
             void* _p_ = ByteSearch(hSteamUI, "RepeatedFieldUint32_Add");
             oRepeatedFieldUint32_Add = reinterpret_cast<RepeatedFieldUint32_Add_t>(_p_);
@@ -459,6 +628,7 @@ namespace SteamUI {
         LM_REMOVE(BuildCompleteAppOverviewChange);
         LM_REMOVE(CSteamUIAppControllerRunFrame);
         LM_REMOVE(MarkAppChange);
+        LM_REMOVE(SerializeAchievements);
         LM_TX_COMMIT();
 
         oAddProtobufAsBinary           = nullptr;
@@ -468,6 +638,14 @@ namespace SteamUI {
         oBuildCompleteAppOverviewChange = nullptr;
         oCSteamUIAppControllerRunFrame  = nullptr;
         oRepeatedFieldUint32_Add       = nullptr;
+        oFindAppStats                  = nullptr;
+        g_pAppChangeSource             = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_removalMutex);
+            g_pendingRemovals.clear();
+            g_pendingTouches.clear();
+            g_removedAppIds.clear();
+        }
         g_coreHookInstalled = false;
     }
 

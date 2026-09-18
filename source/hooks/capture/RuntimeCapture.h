@@ -109,4 +109,8 @@ namespace SteamCapture {
 
     // True once P2P is active - GetAppID should report 480, not the real app.
     bool ShouldReportOnlineFixAppId();
+
+    // Returns the captured SteamEngine pointer (nullptr if not yet seen).
+    void* GetSteamEngine();
 }
+

@@ -15,6 +15,7 @@
 #include "hooks/client/PackagePatch.h"
 #include "hooks/client/LicenseHooks.h"
 #include "hooks/client/OnlineFixInject.h"
+#include "hooks/client/GlobalAchievementHooks.h"
 #include "runtime/CloudRedirectHost.h"
 
 
@@ -29,6 +30,7 @@ namespace BetterLuma {
         PacketRouter::Install,
         OnlineFixInject::Install,
         LicenseHooks::Install,
+        GlobalAchievementHooks::Install,
     };
     static constexpr HookOp kUninstallOrder[] = {
         DepotKeys::Uninstall,
@@ -41,6 +43,7 @@ namespace BetterLuma {
         OnlineFixInject::Uninstall,
         PackagePatch::Uninstall,
         LicenseHooks::Uninstall,
+        GlobalAchievementHooks::Uninstall,
     };
 
     void Attach() { for (auto fn : kInstallOrder) fn(); }

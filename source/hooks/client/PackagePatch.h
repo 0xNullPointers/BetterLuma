@@ -22,4 +22,8 @@ namespace PackagePatch {
 
     // Returns the saved PackageInfo* for package 0 (nullptr if not yet captured).
     PackageInfo* GetPackage0();
+
+    // Broadcasts a callback to all active Steam pipes.
+    bool BroadcastCallback(int iCallback, void* pCallbackData, int cubCallbackData);
 }
+

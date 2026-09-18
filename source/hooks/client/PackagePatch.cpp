@@ -354,8 +354,29 @@ namespace {
         return advertisedTotal;
     }
 
+    std::mutex g_pipeLock;
+    std::vector<std::pair<HSteamPipe, HSteamUser>> g_activePipes;
+    std::atomic<void*> g_capturedEngine{nullptr};
+
     LM_HOOK(SendCallbackToPipe, bool, void* pSteamEngine, HSteamPipe hSteamPipe,
               HSteamUser iClientUser, int iCallback, void* pCallbackData, int cubCallbackData) {
+        if (pSteamEngine && !g_capturedEngine.load(std::memory_order_relaxed)) {
+            g_capturedEngine.store(pSteamEngine, std::memory_order_relaxed);
+        }
+        if (hSteamPipe != 0) {
+            std::lock_guard<std::mutex> lock(g_pipeLock);
+            bool found = false;
+            for (const auto& p : g_activePipes) {
+                if (p.first == hSteamPipe && p.second == iClientUser) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && g_activePipes.size() < 64) {
+                g_activePipes.emplace_back(hSteamPipe, iClientUser);
+            }
+        }
+
         if (iCallback == AppLicensesChanged_t::k_iCallback) {
             return oSendCallbackToPipe(pSteamEngine, hSteamPipe, iClientUser,
                                        iCallback, pCallbackData, cubCallbackData);
@@ -431,6 +452,11 @@ namespace PackagePatch {
         oCUtlMemoryGrow = nullptr;
         g_pPackage0 = nullptr;
         g_package0Seeded.store(false, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(g_pipeLock);
+            g_activePipes.clear();
+        }
+        g_capturedEngine.store(nullptr, std::memory_order_release);
     }
 
     bool InjectIntoPackage0(const std::vector<AppId_t>& appIds, const char* reason) {
@@ -460,4 +486,37 @@ namespace PackagePatch {
     }
 
     PackageInfo* GetPackage0() { return g_pPackage0; }
+
+    bool BroadcastCallback(int iCallback, void* pCallbackData, int cubCallbackData) {
+        void* pEngine = g_capturedEngine.load(std::memory_order_acquire);
+        if (!pEngine) {
+            pEngine = SteamCapture::GetSteamEngine();
+        }
+        if (!pEngine || !oSendCallbackToPipe) {
+            LOG_PACKAGE_WARN("BroadcastCallback: missing engine (0x{:X}) or oSendCallbackToPipe (0x{:X})",
+                             reinterpret_cast<uintptr_t>(pEngine),
+                             reinterpret_cast<uintptr_t>(oSendCallbackToPipe));
+            return false;
+        }
+
+        std::vector<std::pair<HSteamPipe, HSteamUser>> targets;
+        {
+            std::lock_guard<std::mutex> lock(g_pipeLock);
+            targets = g_activePipes;
+        }
+
+        if (targets.empty()) {
+            LOG_PACKAGE_DEBUG("BroadcastCallback: no active pipes captured yet (cb={})", iCallback);
+            return false;
+        }
+
+        bool anyOk = false;
+        for (const auto& [pipe, user] : targets) {
+            if (oSendCallbackToPipe(pEngine, pipe, user, iCallback, pCallbackData, cubCallbackData)) {
+                anyOk = true;
+            }
+        }
+        return anyOk;
+    }
 }
+

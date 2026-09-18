@@ -937,6 +937,10 @@ namespace SteamCapture {
         return appid;
     }
 
+    void* GetSteamEngine() {
+        return g_steamEngine.load(std::memory_order_acquire);
+    }
+
     AppId_t ResolveAppId() {
         AppId_t routed = ActiveRouteRealAppIdInternal();
         if (routed) return routed;
