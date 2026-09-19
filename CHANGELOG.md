@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.4
+
+### Global Achievement Caching & UI Display
+- **Global Achievement Percentages (`GlobalAchievementManager`)**: Implemented an achievement aggregation and caching subsystem that fetches, computes, and locally caches global achievement unlock percentages.
+- **SteamUI & Overlay Rarity Integration**: Hooked client achievement IPC dispatch and SteamUI routines (`GlobalAchievementHooks`), populating true global rarity percentages directly within Steam's library UI, detail panels, and in-game overlay.
+- **Thread-Safe Local Cache Ingestion**: Achievement rarity data is cached atomically on disk with instant in-memory lookup, preventing UI stalls during offline or low-connectivity gameplay.
+
+### Workshop & UGC IPC Auto-Healing
+- **Sign-Extended ID Sanitization (`PublishedFileId_t` / `UGCHandle_t`)**: Solved Workshop item loading and map selection failures caused by 32-bit integer sign-extension into 64-bit handle space (`0xFFFFFFFF...`). Implemented an auto-healing layer in `IPCBus` that normalizes sign-extended PublishedFileIds and UGC handles before dispatch.
+- **Null Safety & Buffer Bounds Enforcement**: Hardened deserialization routines across all `IPCBus` message handlers with strict bounds checking and null pointer validation, preventing buffer over-reads on malformed or truncated IPC payloads.
+
+### OnlineFix AppID Routing for Workshop & Cloud
+- **Context-Aware Genuine AppID Resolution**: Decoupled multiplayer Spacewar (480) network identity from Workshop and cloud storage subsystems. IPC requests for UGC queries, Workshop subscriptions, and save path resolution now resolve to the title's genuine AppID.
+- **Workshop Map & Skin Mounting**: Enables games operating under OnlineFix Spacewar proxying to access, download, and mount subscribed Workshop maps and user-created assets using their authentic Steam directory paths.
+
+### LoaderGate Synchronization & Hook Readiness
+- **Dual Client & UI Readiness Signalling**: Refactored `LoaderGate` synchronization into dedicated client and UI readiness phases, ensuring hook installation across `lcoverlay.dll` is verified and signaled before unblocking host UI threads.
+- **Resilient Bootstrap Hook Sequencing**: Eliminated race windows between Detours hook attachment and late-loading Steam client workers through explicit synchronization primitives.
+
+### Core Architecture & Rebranding
+- **Official Rebrand to BetterLuma**: Standardized project targets, payload modules (`BetterLumaPayload.dll`), proxy gateways (`BetterLuma.dll`), and namespaces across the entire codebase.
+- **Codebase Clean-Up**: Removed obsolete diagnostics subsystems and purged legacy duplicate source trees, optimizing memory footprint and build times.
+- **Compiler & Linker Optimization**: Refined MSVC compiler optimization and linker stripping flags, achieving a lean ~1.0 MB binary size for Release builds.
+- **Unified SHA-256 Hashing (`HashUtil`)**: Consolidated disparate cryptographic hashing routines into a high-performance, unified utility for IPC spec validation and pattern verification.
+
+### Automated Deployment & Installer Tooling
+- **Automated PowerShell Deployment Script (`Install-BetterLuma.ps1`)**: Introduced an automated installer script supporting one-liner execution.
+- **Exclusive Registry Discovery**: Detects the Steam installation directory directly from the Windows Registry.
+- **Interactive Build Selection**: Allows to select between the recommended optimized Release build and the developer Debug build.
+- **Safe Collision Handling & Self-Deleting Uninstaller**: Automatically backs up conflicting DLLs and `opensteamtool.dll` to `.bak` (replacing existing BetterLuma DLLs directly) and generates a self-deleting uninstaller (`uninstall-BetterLuma.bat`).
+
 ## v0.3
 
 ### Startup Synchronization & Race Elimination (Loader Gate)
