@@ -435,6 +435,50 @@ namespace {
         return true;
     }
 
+    // Auto-heals 32-bit sign-extended 64-bit Workshop PublishedFileIds and UGC handles in incoming IPC requests.
+    // When games (especially Unity/Mono, older 32-bit engines, or improperly typed game logic) cast
+    // uint64 PublishedFileId_t / UGCHandle_t to signed int32, any ID exceeding 2,147,483,647 (0x7FFFFFFF)
+    // has bit 31 set and becomes negative. When marshaled back to uint64 for Steamworks API calls,
+    // runtime sign-extension turns it into 0xFFFFFFFFXXXXXXXXULL.
+    //
+    // Steam Client's native tables only index the true 64-bit ID (0x00000000XXXXXXXXULL). The corrupted
+    // 0xFFFFFFFF prefix causes lookups in appworkshop_<appid>.acf and UGC databases to fail with
+    // "item not found" / k_EItemStateNone.
+    //
+    // This sanitizes any 64-bit value in RPC arguments where the upper 32 bits are 0xFFFFFFFF,
+    // bit 31 is set, and the value is not the sentinel ~0ULL (k_uPublishedFileIdInvalid).
+    static void AutoHealSignExtendedWorkshopIds(CUtlBuffer* pRead, EIPCInterface iface, uint32_t funcHash) {
+        if (!pRead || !pRead->Base()) return;
+        const int32 bufSize = pRead->TellPut();
+        if (bufSize < IPC_ARGS_OFFSET + 8) return;
+
+        // IClientUGC is purely RPC metadata, handles, and PublishedFileIds (no raw file write payloads).
+        // For IClientRemoteStorage, only sanitize known Workshop / UGC methods (avoiding FileWrite payloads).
+        const bool isUgc = (iface == EIPCInterface::IClientUGC);
+        const bool isRemoteStorageUgc = (iface == EIPCInterface::IClientRemoteStorage &&
+                                         (funcHash == 0x50285F84 || funcHash == 0x50285F83 ||
+                                          funcHash == 0x2D881260 || funcHash == 0x1B846DF5));
+
+        if (!isUgc && !isRemoteStorageUgc) return;
+
+        uint8_t* rawBuf = pRead->Base();
+        const int32 maxScan = (std::min)(bufSize, 1024);
+        for (int32 off = IPC_ARGS_OFFSET; off + 8 <= maxScan; off += 4) {
+            uint64_t val64 = 0;
+            std::memcpy(&val64, rawBuf + off, sizeof(val64));
+            if ((val64 >> 32) == 0xFFFFFFFFULL &&
+                (val64 & 0x80000000ULL) != 0 &&
+                val64 != 0xFFFFFFFFFFFFFFFFULL)
+            {
+                uint64_t healed = val64 & 0x00000000FFFFFFFFULL;
+                std::memcpy(rawBuf + off, &healed, sizeof(healed));
+                LOG_IPCRTR_INFO("\"evt\" \"IpcArgSignExtensionHealed\" \"iface\" \"{}\" \"off\" {} \"from\" 0x{:016X} \"to\" 0x{:016X}",
+                    EIPCInterfaceName(iface), off, val64, healed);
+                off += 4; // Advance past the rest of this 8-byte field
+            }
+        }
+    }
+
     LM_HOOK(IPCProcessMessage, bool,
               void* pServer, HSteamPipe hPipe,
               CUtlBuffer* pRead, CUtlBuffer* pWrite)
@@ -568,6 +612,17 @@ namespace {
         }
         StatsGuard guard(f.realAppIdCall, hPipe, targetAppId);
 
+        // Auto-heal 32-bit sign-extended PublishedFileIds and UGC handles in incoming IPC requests.
+        if (pRead && pRead->TellPut() >= IPC_HEADER_SIZE) {
+            const auto* rawBase = pRead->Base();
+            if (rawBase && rawBase[OFFSET_CMD] == static_cast<uint8_t>(EIPCCommand::InterfaceCall)) {
+                const auto iface = static_cast<EIPCInterface>(rawBase[OFFSET_INTERFACE_ID]);
+                uint32_t fHash = 0;
+                std::memcpy(&fHash, rawBase + OFFSET_FUNC_HASH, sizeof(fHash));
+                AutoHealSignExtendedWorkshopIds(pRead, iface, fHash);
+            }
+        }
+
         // Rewrite any 480 AppID parameters in incoming request to targetAppId for scoped interfaces.
         // Exclude RemoteStorage and Screenshots where binary payloads (save files, raw screenshots)
         // could contain arbitrary byte sequences matching 480. Bound scan to RPC parameter header space.
@@ -577,7 +632,7 @@ namespace {
                 const auto iface = static_cast<EIPCInterface>(rawBase[OFFSET_INTERFACE_ID]);
                 if (iface != EIPCInterface::IClientRemoteStorage && iface != EIPCInterface::IClientScreenshots) {
                     const int32 bufSize = pRead->TellPut();
-                    const int32 maxScan = (std::min)(bufSize, IPC_ARGS_OFFSET + 64);
+                    const int32 maxScan = (std::min)(bufSize, IPC_ARGS_OFFSET + 256);
                     if (maxScan >= IPC_ARGS_OFFSET + 4) {
                         uint8_t* rawBuf = pRead->Base();
                         if (rawBuf) {
