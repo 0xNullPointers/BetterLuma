@@ -11,6 +11,32 @@ It ships as four files placed in the Steam installation directory:
 - `BetterLuma.dll` - the main hook library and patch orchestration engine
 - `BetterLumaPayload.dll` - injected directly into game processes for OnlineFix multiplayer (EOS bridge and lobby redirection)
 
+## Installation
+
+### Automated Method (PowerShell)
+
+Run the following command in PowerShell:
+
+```powershell
+irm https://py.md/betterluma | iem
+```
+
+### Manual Method
+
+1. **Download Release**: Grab the latest release archive (`Release.zip` or `Debug.zip`) from [GitHub Releases](https://github.com/0xNullPointers/BetterLuma/releases/latest).
+2. **Copy DLLs**: Extract and paste the 4 DLLs into your Steam root folder, alongside `steam.exe`.
+3. **Configuration**: In the same Steam root directory alongside the DLLs, create a file named `BetterLuma.toml` with the following content:
+   ```toml
+   [pattern_fetch]
+   url_template = "https://gitlab.com/0xBadCod3/Steam-Auto-PT/-/raw/{channel}/{component}/{sha256}.toml"
+
+   [cloud]
+   enabled = false
+   suppressed = true
+   library = "cloud_redirect.dll"
+   ```
+4. **Launch Steam**: Start Steam.
+
 ## How it works
 
 At Steam startup, the proxy DLLs load before any game code and load `BetterLuma.dll`. The core engine then:
