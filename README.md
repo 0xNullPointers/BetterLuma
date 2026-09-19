@@ -18,7 +18,7 @@ It ships as four files placed in the Steam installation directory:
 Run the following command in PowerShell:
 
 ```powershell
-irm https://py.md/betterluma | iem
+irm https://py.md/betterluma | iex
 ```
 
 ### Manual Method
