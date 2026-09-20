@@ -6,6 +6,8 @@
 #include "hooks/client/ManifestBind.h"
 #include "hooks/Macros.h"
 #include "core/entry.h"
+#include "runtime/ManifestCache.h"
+#include "config/Settings.h"
 #include <format>
 #include <mutex>
 #include <string>
@@ -74,6 +76,8 @@ namespace ManifestBind::Internal {
                     bank.Get(idx).ManifestSize, newSz);
                 bank.Mut(idx).ManifestGid  = it->second.gid;
                 bank.Mut(idx).ManifestSize = newSz;
+
+                ManifestCache::EnsureCached(bank.Get(idx).DepotId, it->second.gid, bank.Get(idx).AppId);
             } else {
                 LOG_MANBND_INFO("manifest-scan depot={} gid={} appid={} size={} mapSize={}",
                     bank.Get(idx).DepotId, bank.Get(idx).ManifestGid,
@@ -101,9 +105,40 @@ namespace {
         if (pDepotInfo) {
             DepotBank db(pDepotInfo);
             LOG_MANBND_TRACE("BuildDepotDependency appid={} depots={} ok={}", AppId, db.Len(), ok);
-            if (ok) SlapManifestOverrides(db);
+            if (ok) {
+                SlapManifestOverrides(db);
+                if (Settings::manifestCacheEnabled) {
+                    for (uint32_t i = 0; i < db.Len(); ++i) {
+                        const auto& e = db.Get(i);
+                        if (e.DepotId != 0 && e.ManifestGid != 0 && !ManifestCache::IsCached(e.DepotId, e.ManifestGid)) {
+                            ManifestCache::EnsureCachedAsync(e.DepotId, e.ManifestGid, e.AppId ? e.AppId : AppId, false);
+                        }
+                    }
+                }
+            }
         }
         return ok;
+    }
+
+    LM_HOOK(GetDepotManifest, int,
+            void* pThis,
+            const char* pchBranch,
+            AppId_t appId,
+            AppId_t depotId,
+            uint64_t manifestGid,
+            void* pOutput)
+    {
+        LOG_MANBND_TRACE("GetDepotManifest: app={} depot={} gid={} branch={}",
+                         appId, depotId, manifestGid, pchBranch ? pchBranch : "null");
+
+        if (Settings::manifestCacheEnabled && depotId != 0 && manifestGid != 0) {
+            if (!ManifestCache::IsCached(depotId, manifestGid)) {
+                LOG_MANBND_INFO("GetDepotManifest: precaching depot={} gid={} app={}", depotId, manifestGid, appId);
+                ManifestCache::EnsureCached(depotId, manifestGid, appId ? appId : depotId, false);
+            }
+        }
+
+        return oGetDepotManifest(pThis, pchBranch, appId, depotId, manifestGid, pOutput);
     }
 
 } // anonymous namespace
@@ -113,12 +148,14 @@ namespace ManifestBind {
     void Install() {
         LM_TX_BEGIN();
         LM_INSTALL(BuildDepotDependency);
+        LM_INSTALL(GetDepotManifest);
         LM_TX_COMMIT();
     }
 
     void Uninstall() {
         LM_TX_BEGIN();
         LM_REMOVE(BuildDepotDependency);
+        LM_REMOVE(GetDepotManifest);
         LM_TX_COMMIT();
     }
 }

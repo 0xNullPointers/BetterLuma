@@ -39,11 +39,10 @@ namespace ManifestFetch {
     void Submit(uint64_t jobId, uint64_t manifestGid,
                 uint32_t appId, uint32_t depotId);
 
-    // Drains the future for `jobId` (consuming it), waiting at most the
-    // configured timeout. Returns the parsed manifest_request_code on
-    // success, or std::nullopt on timeout / network failure / parse
-    // failure. Thread-safe; callers are the recv handlers in PacketRouter.
-    std::optional<uint64_t> Resolve(uint64_t jobId);
+    // Drains the future for `jobId` (consuming it), waiting at most `waitMs`
+    // milliseconds. Returns the parsed manifest_request_code on success, or
+    // std::nullopt on timeout / network failure / parse failure. Thread-safe.
+    std::optional<uint64_t> Resolve(uint64_t jobId, uint32_t waitMs = 2500);
 
     // Drops any pending future for `jobId` without waiting. Used when
     // the recv side decides not to patch (e.g. depot not in our scope).

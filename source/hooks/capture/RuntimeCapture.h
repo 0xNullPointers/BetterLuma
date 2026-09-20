@@ -96,6 +96,10 @@ namespace SteamCapture {
     // MarkLicenseAsChanged, which Steam makes during license load on startup).
     void NotifyLicenseChanged();
 
+    // Re-evaluates license and pending download/update state for an app in Steam.
+    // Triggers ProcessPendingLicenseUpdates and queues a library touch in SteamUI.
+    void RefreshAppUpdate(AppId_t appId = 0);
+
     // Returns true when all captures needed by NotifyLicenseChanged are ready.
     // Used by the startup injection thread to know when it's safe to call NotifyLicenseChanged.
     bool IsReadyForNotify();

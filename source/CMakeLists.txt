@@ -79,6 +79,7 @@ add_library(BetterLuma SHARED
     runtime/VehUtil.cpp
     runtime/RuntimeHttp.cpp
     runtime/ManifestFetch.cpp
+    runtime/ManifestCache.cpp
     runtime/ProtectionProbe.cpp
     runtime/RemoteTools.cpp
     runtime/IpcSpecLoader.cpp

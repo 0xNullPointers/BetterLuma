@@ -27,11 +27,13 @@ namespace RuntimeHttp {
         std::string  diagnostic;
     };
 
-    // Single-shot HTTP/HTTPS GET. Body is capped at 8 MiB. The total
-    // resolve+connect+send+recv budget is 12 seconds; longer transfers
-    // get cut off and return networkError=true.
+    // Single-shot HTTP/HTTPS GET. Body is capped at maxCap (default 8 MiB).
+    // The total resolve+connect+send+recv budget is timeoutMs (default 12 seconds);
+    // longer transfers get cut off and return networkError=true.
     Response Get(std::string_view url,
-                 std::wstring_view userAgent = L"BetterLuma-RuntimeHttp/1.0");
+                 std::wstring_view userAgent = L"BetterLuma-RuntimeHttp/1.0",
+                 std::size_t maxCap = 8u * 1024u * 1024u,
+                 uint32_t timeoutMs = 12'000);
 
     // Single-shot HTTP/HTTPS POST. Same caps as GET.
     // extraHeaders are raw "Header: value" strings appended to the request.

@@ -13,11 +13,29 @@ verbose = true
 # Extra directories to watch for .lua files (beyond config/stplug-in/)
 paths = []
 
+[manifest_cache]
+# Direct binary manifest file archive downloader.
+# Downloads the full pre-computed .manifest file directly into Steam/depotcache/{depot}_{gid}.manifest.
+# Steam finds the file locally on disk and skips CDN request codes entirely.
+# If a manifest is not found (404), BetterLuma falls back to [manifest_fetch] for request codes.
+# Placeholders: {depotid}, {depot}, {gid}, {manifestid}, {appid}
+enabled = true
+urls = [
+    "https://manifest.luastools.xyz/m/{depotid}/{gid}",
+]
+# Max seconds to wait per provider before trying the next one (default 30s for large binary manifests)
+timeout_sec = 30
+# Trusted host allowlist - responses from other hosts are rejected
+trusted_hosts = [
+    "manifest.luastools.xyz",
+]
+
 [manifest_fetch]
 # URL chain for depot manifest downloads, tried in order until one returns 200.
 # {gid} is replaced with the manifest GID at request time.
 # The first built-in provider needs a compatibility User-Agent; BetterLuma adds it internally.
 urls = [
+    "https://manifest.opensteamtool.com/{appid}/{depotid}/{gid}",
     "https://manifest.opensteamtool.com/{gid}",
     "https://manifest.steam.run/api/manifest/{gid}",
     "http://gmrc.wudrm.com/manifest/{gid}",

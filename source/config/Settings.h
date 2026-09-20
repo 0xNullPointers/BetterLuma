@@ -92,6 +92,19 @@ namespace Settings {
     // healthy first provider doesn't pay the budget of the slow ones.
     inline int manifestFetchTimeoutSec = 12;
     inline std::vector<std::string> manifestFetchTrustedHosts;
+
+    // [manifest_cache]
+    // Binary manifest archive downloader that saves pre-computed .manifest files
+    // directly to <Steam>/depotcache/<depotId>_<gid>.manifest.
+    // When present, Steam reads the manifest locally and skips CDN request codes entirely.
+    inline bool manifestCacheEnabled = true;
+    inline std::vector<std::string> manifestCacheUrls = {
+        "https://manifest.luastools.xyz/m/{depotid}/{gid}",
+    };
+    inline int manifestCacheTimeoutSec = 30;
+    inline std::vector<std::string> manifestCacheTrustedHosts = {
+        "manifest.luastools.xyz",
+    };
     inline bool statsEnableApi = true;
     inline bool processExtensionEnabled = false;
     inline std::string processExtensionX86;

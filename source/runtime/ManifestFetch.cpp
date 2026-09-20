@@ -178,12 +178,16 @@ namespace {
             std::string url = ExpandTemplate(tmpl, gid, appId, depotId);
             LOG_MANIFESTCH_INFO("ManifestFetch: gid={} provider {}/{} GET {}",
                                 gid, i + 1, chain.size(), url);
+            uint32_t httpTimeoutMs = static_cast<uint32_t>(
+                Settings::manifestFetchTimeoutSec > 0 ? (Settings::manifestFetchTimeoutSec * 1000) / chain.size() : 2500);
+            if (httpTimeoutMs < 1000) httpTimeoutMs = 1000;
+            if (httpTimeoutMs > 3000) httpTimeoutMs = 3000;
 
             RuntimeHttp::Response resp{};
             for (int attempt = 0; attempt < 2; ++attempt) {
                 resp = UsesProviderCompatAgent(url)
-                    ? RuntimeHttp::Get(url, L"OpenSteamTool/1.0")
-                    : RuntimeHttp::Get(url);
+                    ? RuntimeHttp::Get(url, L"OpenSteamTool/1.0", 8u * 1024u * 1024u, httpTimeoutMs)
+                    : RuntimeHttp::Get(url, L"BetterLuma-RuntimeHttp/1.0", 8u * 1024u * 1024u, httpTimeoutMs);
                 if (!resp.networkError && resp.status == 429 && attempt == 0) {
                     LOG_MANIFESTCH_WARN("ManifestFetch: gid={} provider {} HTTP=429 "
                                         "body_bytes={}, retrying once",
@@ -269,7 +273,7 @@ namespace ManifestFetch {
         }).detach();
     }
 
-    std::optional<uint64_t> Resolve(uint64_t jobId) {
+    std::optional<uint64_t> Resolve(uint64_t jobId, uint32_t waitMs) {
         std::shared_future<std::optional<uint64_t>> fut;
         {
             std::lock_guard<std::mutex> lock(g_lock);
@@ -278,10 +282,10 @@ namespace ManifestFetch {
             fut = it->second;
             g_pending.erase(it);
         }
-        const int budget = Settings::manifestFetchTimeoutSec > 0
-                         ? Settings::manifestFetchTimeoutSec : 12;
-        if (fut.wait_for(std::chrono::seconds(budget)) != std::future_status::ready) {
-            LOG_MANIFESTCH_WARN("ManifestFetch: jobId={} timed out after {}s", jobId, budget);
+        if (waitMs > 0 && fut.wait_for(std::chrono::milliseconds(waitMs)) != std::future_status::ready) {
+            LOG_MANIFESTCH_DEBUG("ManifestFetch: jobId={} not ready within {}ms, skipping wait", jobId, waitMs);
+            return std::nullopt;
+        } else if (waitMs == 0 && fut.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
             return std::nullopt;
         }
         return fut.get();

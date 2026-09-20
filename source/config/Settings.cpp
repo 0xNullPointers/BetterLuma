@@ -36,6 +36,20 @@ namespace Settings {
             };
         }
 
+        std::vector<std::string> DefaultManifestCacheUrls()
+        {
+            return {
+                "https://manifest.luastools.xyz/m/{depotid}/{gid}",
+            };
+        }
+
+        std::vector<std::string> DefaultManifestCacheTrustedHosts()
+        {
+            return {
+                "manifest.luastools.xyz",
+            };
+        }
+
         void ResetConfigValues()
         {
             logLevel = LogLevel::Debug;
@@ -47,6 +61,10 @@ namespace Settings {
             manifestFetchUrls = DefaultManifestUrls();
             manifestFetchTrustedHosts = DefaultManifestTrustedHosts();
             manifestFetchTimeoutSec = 12;
+            manifestCacheEnabled = true;
+            manifestCacheUrls = DefaultManifestCacheUrls();
+            manifestCacheTrustedHosts = DefaultManifestCacheTrustedHosts();
+            manifestCacheTimeoutSec = 30;
             statsEnableApi = true;
             processExtensionEnabled = false;
             processExtensionX86.clear();
@@ -200,6 +218,35 @@ namespace Settings {
                 }
             }
 
+            // [manifest_cache]
+            if (auto mcache = tbl["manifest_cache"].as_table()) {
+                if (auto en = (*mcache)["enabled"].value<bool>())
+                    manifestCacheEnabled = *en;
+                if (auto arr = (*mcache)["urls"].as_array()) {
+                    std::vector<std::string> chain;
+                    chain.reserve(arr->size());
+                    for (const auto& elem : *arr) {
+                        if (auto s = elem.value<std::string>())
+                            chain.push_back(*s);
+                    }
+                    if (!chain.empty())
+                        manifestCacheUrls = std::move(chain);
+                } else if (auto u = (*mcache)["url"].value<std::string>()) {
+                    manifestCacheUrls = { *u };
+                }
+                if (auto t = (*mcache)["timeout_sec"].value<int64_t>())
+                    manifestCacheTimeoutSec = static_cast<int>(*t);
+                if (auto hosts = (*mcache)["trusted_hosts"].as_array()) {
+                    std::vector<std::string> allow;
+                    allow.reserve(hosts->size());
+                    for (const auto& elem : *hosts) {
+                        if (auto s = elem.value<std::string>())
+                            allow.push_back(*s);
+                    }
+                    manifestCacheTrustedHosts = std::move(allow);
+                }
+            }
+
             // [stats]
             if (auto stats = tbl["stats"].as_table()) {
                 if (auto enableApi = (*stats)["enable_api"].value<bool>())
@@ -258,11 +305,18 @@ namespace Settings {
                 if (!trustedLog.empty()) trustedLog += ",";
                 trustedLog += h;
             }
-            if (trustedLog.empty()) trustedLog = "<none>";
+            std::string cacheUrlsLog;
+            for (const auto& u : manifestCacheUrls) {
+                if (!cacheUrlsLog.empty()) cacheUrlsLog += " | ";
+                cacheUrlsLog += u;
+            }
+            if (cacheUrlsLog.empty()) cacheUrlsLog = "<disabled>";
 
             LOG_INFO("Settings: log.level={} log.verbose={} lua.paths_count={} "
                      "pattern_fetch.mirror={} manifest_fetch.urls=[{}] "
                      "manifest_fetch.timeout_sec={} manifest_fetch.trusted_hosts=[{}] "
+                     "manifest_cache.enabled={} manifest_cache.urls=[{}] "
+                     "manifest_cache.timeout_sec={} "
                      "stats.enable_api={} process_extension.enabled={} "
                      "onlinefix.inject_enabled={} steamstub.auto_enabled={} "
                      "cloud.enabled={} cloud.suppressed={} cloud.library={}",
@@ -272,6 +326,9 @@ namespace Settings {
                      urlsLog,
                      manifestFetchTimeoutSec,
                      trustedLog,
+                     manifestCacheEnabled ? "true" : "false",
+                     cacheUrlsLog,
+                     manifestCacheTimeoutSec,
                      statsEnableApi ? "true" : "false",
                      processExtensionEnabled ? "true" : "false",
                      onlineFixInjectEnabled ? "true" : "false",

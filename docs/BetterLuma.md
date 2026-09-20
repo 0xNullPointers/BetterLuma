@@ -208,13 +208,17 @@ BetterLuma expands upon original LumaCore by supporting launching and running mu
 
 ---
 
-### Manifest Bind & Fetch (`hooks/client/ManifestBind.cpp` + `runtime/ManifestFetch.cpp`)
+### Manifest Bind, Cache & Fetch (`hooks/client/ManifestBind.cpp`, `runtime/ManifestCache.cpp`, `runtime/ManifestFetch.cpp`)
 
-Manifest download bridge with HTTPS-first URL chain fallback.
+BetterLuma implements a two-tier manifest resolution architecture:
 
-When Steam requests a depot manifest (gid) and the original call fails with a network error, the bridge tries a chain of mirror URLs with `{gid}` substituted into the path. The first server that returns HTTP 200 wins; the response body is written into Steam's internal buffer as if the original call succeeded. Trusted host checking prevents redirects to unexpected domains.
+1. **Tier 1 - Direct Binary Manifest Cache (`runtime/ManifestCache.cpp`)**:
+   When Steam evaluates depot dependencies in `BuildDepotDependency`, BetterLuma checks if the target `.manifest` file exists in `<Steam>\depotcache\<depotId>_<gid>.manifest`. If missing or invalid, it downloads the full binary manifest directly from configured cache providers into `depotcache/`. All downloaded files are verified against Steam's binary manifest magic bytes (header `0x71F617D0` and EOF trailer `0x32C415AB`) and written atomically via `.tmp` staging. Because Steam finds the valid `.manifest` file locally, it skips CDN request codes and downloads entirely.
 
-Default URL chain (HTTPS first, HTTP as last resort):
+2. **Tier 2 - Wire-Level Request Code Fallback (`runtime/ManifestFetch.cpp` + `hooks/client/NetPacket_Manifest.cpp`)**:
+   If a manifest is not found in the binary cache (HTTP 404 or network miss), Steam proceeds to request a manifest request code via `ContentServerDirectory.GetManifestRequestCode#1` (CM packet 151). BetterLuma intercepts the request and queries a chain of request code mirrors, rewriting the CM response body with the returned `uint64_t` request code so Steam can fetch the manifest from Valve's CDN.
+
+Default Request Code URL chain:
 1. `https://manifest.opensteamtool.com/{gid}`
 2. `https://manifest.steam.run/api/manifest/{gid}`
 3. `http://gmrc.wudrm.com/manifest/{gid}`

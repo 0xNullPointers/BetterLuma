@@ -1346,4 +1346,22 @@ namespace SteamCapture {
         LOG_PACKAGE_INFO("NotifyLicenseChanged: {} added, {} removed ({} from vector)",
                          additions.size(), removals.size(), removedCount);
     }
+
+    void RefreshAppUpdate(AppId_t appId) {
+        static std::mutex s_refreshMutex;
+        std::lock_guard<std::mutex> lock(s_refreshMutex);
+
+        void* pUser = g_pCUser.load(std::memory_order_acquire);
+        if (pUser && oMarkLicenseAsChanged && oProcessPendingLicenseUpdates) {
+            oMarkLicenseAsChanged(pUser, 0, true);
+            oProcessPendingLicenseUpdates(pUser);
+            LOG_PACKAGE_INFO("RefreshAppUpdate: triggered license update and scheduler re-eval for appId={}", appId);
+        } else {
+            LOG_PACKAGE_WARN("RefreshAppUpdate: pUser or license functions not ready for appId={}", appId);
+        }
+        if (appId != 0) {
+            SteamUI::QueueLibraryTouch(appId);
+        }
+    }
 }
+
