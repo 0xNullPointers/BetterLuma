@@ -66,20 +66,31 @@ jobs:
         shell: pwsh
         run: |
           # Verify compiled binaries exist
-          if (-not (Test-Path "Releases/Release/BetterLuma.dll")) {
-              throw "Releases/Release/BetterLuma.dll was not generated!"
-          }
-          if (-not (Test-Path "Releases/Debug/BetterLuma.dll")) {
-              throw "Releases/Debug/BetterLuma.dll was not generated!"
+          $expectedDlls = @(
+              'BetterLuma.dll',
+              'BetterLumaPayload.dll',
+              'BetterLumaPayload32.dll',
+              'dwmapi.dll',
+              'xinput1_4.dll'
+          )
+          foreach ($dll in $expectedDlls) {
+              if (-not (Test-Path "Releases/Release/$dll")) {
+                  throw "Releases/Release/$dll was not generated!"
+              }
+              if (-not (Test-Path "Releases/Debug/$dll")) {
+                  throw "Releases/Debug/$dll was not generated!"
+              }
           }
 
           # Package Release DLLs
-          tar -a -c -f "Releases/Release.zip" -C "Releases/Release" BetterLuma.dll dwmapi.dll xinput1_4.dll BetterLumaPayload.dll
-          Write-Host "Created Releases/Release.zip"
+          $relDlls = Get-ChildItem -Path "Releases/Release" -Filter "*.dll" | Select-Object -ExpandProperty Name
+          & tar -a -c -f "Releases/Release.zip" -C "Releases/Release" $relDlls
+          Write-Host "Created Releases/Release.zip containing: $($relDlls -join ', ')"
 
           # Package Debug DLLs
-          tar -a -c -f "Releases/Debug.zip" -C "Releases/Debug" BetterLuma.dll dwmapi.dll xinput1_4.dll BetterLumaPayload.dll
-          Write-Host "Created Releases/Debug.zip"
+          $debDlls = Get-ChildItem -Path "Releases/Debug" -Filter "*.dll" | Select-Object -ExpandProperty Name
+          & tar -a -c -f "Releases/Debug.zip" -C "Releases/Debug" $debDlls
+          Write-Host "Created Releases/Debug.zip containing: $($debDlls -join ', ')"
 
           # Compute SHA-256 Checksums (Industry standard for binary release verification)
           $relHash = (Get-FileHash -Algorithm SHA256 "Releases/Release.zip").Hash.ToLower()
