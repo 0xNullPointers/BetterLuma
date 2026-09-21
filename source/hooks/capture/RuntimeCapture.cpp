@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <mutex>
 #include <string_view>
 #include <thread>
@@ -372,6 +373,207 @@ namespace {
         return result;
     }
 
+    // ── -playbtn Custom Executable Redirection ─────────────────────
+    struct PlayBtnConfig {
+        bool active = false;
+        std::string redirectedExe;
+        std::string redirectedWorkDir;
+        std::string modifiedCmdLine;
+    };
+
+    static bool IsSubpath(const std::filesystem::path& child, const std::filesystem::path& parent) {
+        auto childStr = child.wstring();
+        auto parentStr = parent.wstring();
+
+        std::replace(childStr.begin(), childStr.end(), L'/', L'\\');
+        std::replace(parentStr.begin(), parentStr.end(), L'/', L'\\');
+
+        while (parentStr.size() > 1 && (parentStr.back() == L'\\' || parentStr.back() == L'/'))
+            parentStr.pop_back();
+
+        if (childStr.size() <= parentStr.size()) return false;
+
+        if (_wcsnicmp(childStr.c_str(), parentStr.c_str(), parentStr.size()) != 0)
+            return false;
+
+        wchar_t sep = childStr[parentStr.size()];
+        return sep == L'\\';
+    }
+
+    static PlayBtnConfig ParseAndResolvePlayBtn(const char* exePath, const char* cmdLine, const char* workDir) {
+        PlayBtnConfig result;
+        if (!cmdLine || !*cmdLine) return result;
+
+        constexpr const char kFlag[] = "-playbtn";
+        constexpr size_t kFlagLen = sizeof(kFlag) - 1;
+
+        const char* p = cmdLine;
+        const char* match = nullptr;
+        while (*p) {
+            const bool boundary = (p == cmdLine || *(p - 1) == ' ' || *(p - 1) == '\t');
+            if (boundary && _strnicmp(p, kFlag, kFlagLen) == 0) {
+                const char next = p[kFlagLen];
+                if (next == '=' || next == ':' || next == ' ' || next == '\t') {
+                    match = p;
+                    break;
+                }
+            }
+            ++p;
+        }
+
+        if (!match) return result;
+
+        const char* sep = match + kFlagLen;
+        while (*sep == ' ' || *sep == '\t') ++sep;
+        if (*sep == '=' || *sep == ':') {
+            ++sep;
+            while (*sep == ' ' || *sep == '\t') ++sep;
+        }
+        const char* valStart = sep;
+        std::string rawPath;
+        const char* valEnd = nullptr;
+
+        if (*valStart == '"') {
+            ++valStart;
+            const char* closeQuote = strchr(valStart, '"');
+            if (closeQuote) {
+                rawPath.assign(valStart, closeQuote - valStart);
+                valEnd = closeQuote + 1;
+            } else {
+                rawPath.assign(valStart);
+                valEnd = valStart + rawPath.size();
+            }
+        } else {
+            const char* space = valStart;
+            while (*space && *space != ' ' && *space != '\t') {
+                ++space;
+            }
+            rawPath.assign(valStart, space - valStart);
+            valEnd = space;
+        }
+
+        while (!rawPath.empty() && (rawPath.front() == ' ' || rawPath.front() == '\t')) rawPath.erase(rawPath.begin());
+        while (!rawPath.empty() && (rawPath.back() == ' ' || rawPath.back() == '\t')) rawPath.pop_back();
+
+        if (rawPath.empty()) {
+            LOG_MISC_WARN("SpawnProcess: empty -playbtn argument encountered");
+            return result;
+        }
+
+        // Security check 1: Reject UNC / network shares / NT device namespaces
+        if (rawPath.rfind("\\\\", 0) == 0 || rawPath.rfind("//", 0) == 0) {
+            LOG_MISC_WARN("SECURITY: -playbtn rejected network/UNC path \"{}\"", rawPath);
+            return result;
+        }
+
+        // Security check 2: Reject Alternate Data Streams (colon anywhere after drive letter index 1)
+        for (size_t i = 0; i < rawPath.size(); ++i) {
+            if (rawPath[i] == ':' && i != 1) {
+                LOG_MISC_WARN("SECURITY: -playbtn rejected stream/colon path \"{}\"", rawPath);
+                return result;
+            }
+        }
+
+        // Determine base game installation directory
+        std::filesystem::path installDir;
+        if (workDir && *workDir) {
+            installDir = workDir;
+        } else if (exePath && *exePath) {
+            installDir = std::filesystem::path(exePath).parent_path();
+        } else {
+            LOG_MISC_WARN("SECURITY: -playbtn rejected: cannot determine game install directory");
+            return result;
+        }
+
+        std::filesystem::path target(rawPath);
+        std::filesystem::path resolved = target.is_relative()
+            ? (installDir / target).lexically_normal()
+            : target.lexically_normal();
+        resolved.make_preferred();
+
+        // Security check 3: Must strictly have .exe extension
+        if (_stricmp(resolved.extension().string().c_str(), ".exe") != 0) {
+            LOG_MISC_WARN("SECURITY: -playbtn rejected non-exe file extension \"{}\" for target \"{}\"",
+                          resolved.extension().string(), rawPath);
+            return result;
+        }
+
+        // Security check 4: Must exist and be a regular file
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(resolved, ec) || ec) {
+            LOG_MISC_WARN("SpawnProcess: -playbtn target \"{}\" (resolved \"{}\") not found or not a regular file (ec={}); falling back to default",
+                          rawPath, resolved.string(), ec.value());
+            return result;
+        }
+
+        // Security check 5: Jail check. Target MUST reside within the canonical game install directory.
+        // std::filesystem::canonical resolves symlinks, NTFS junctions, and relative segments.
+        std::filesystem::path canonTarget = std::filesystem::canonical(resolved, ec);
+        if (ec) {
+            LOG_MISC_WARN("SECURITY: -playbtn canonicalization failed for \"{}\" (ec={})", resolved.string(), ec.value());
+            return result;
+        }
+
+        std::filesystem::path canonInstallDir = std::filesystem::canonical(installDir, ec);
+        if (ec) {
+            LOG_MISC_WARN("SECURITY: -playbtn canonicalization failed for install dir \"{}\" (ec={})", installDir.string(), ec.value());
+            return result;
+        }
+
+        if (!IsSubpath(canonTarget, canonInstallDir)) {
+            LOG_MISC_WARN("SECURITY: -playbtn jail violation! Target \"{}\" (canonical \"{}\") is outside game install dir \"{}\" (canonical \"{}\"); rejecting",
+                          rawPath, canonTarget.string(), installDir.string(), canonInstallDir.string());
+            return result;
+        }
+
+        result.active = true;
+        result.redirectedExe = resolved.string();
+        result.redirectedWorkDir = resolved.parent_path().string();
+
+        const size_t matchOffset = match - cmdLine;
+        const size_t matchLen = valEnd - match;
+
+        std::string strippedCmd = cmdLine;
+        size_t eraseStart = matchOffset;
+        size_t eraseLen = matchLen;
+        if (eraseStart > 0 && (strippedCmd[eraseStart - 1] == ' ' || strippedCmd[eraseStart - 1] == '\t')) {
+            --eraseStart;
+            ++eraseLen;
+        } else if (eraseStart + eraseLen < strippedCmd.size() && (strippedCmd[eraseStart + eraseLen] == ' ' || strippedCmd[eraseStart + eraseLen] == '\t')) {
+            ++eraseLen;
+        }
+        strippedCmd.erase(eraseStart, eraseLen);
+
+        std::string formattedExe = result.redirectedExe;
+        if (formattedExe.find(' ') != std::string::npos) {
+            formattedExe = "\"" + formattedExe + "\"";
+        }
+
+        if (exePath && *exePath) {
+            std::string origExe = exePath;
+            std::string quotedOrig = "\"" + origExe + "\"";
+
+            if (strippedCmd.rfind(quotedOrig, 0) == 0) {
+                strippedCmd.replace(0, quotedOrig.length(), formattedExe);
+            } else if (strippedCmd.rfind(origExe, 0) == 0) {
+                if (strippedCmd.length() == origExe.length() ||
+                    strippedCmd[origExe.length()] == ' ' ||
+                    strippedCmd[origExe.length()] == '\t') {
+                    strippedCmd.replace(0, origExe.length(), formattedExe);
+                }
+            }
+        }
+
+        if (strippedCmd.empty()) {
+            strippedCmd = formattedExe;
+        }
+
+        result.modifiedCmdLine = std::move(strippedCmd);
+        LOG_MISC_INFO("SpawnProcess: -playbtn redirected \"{}\" -> \"{}\" (workDir=\"{}\") cmd=\"{}\"",
+                      exePath ? exePath : "(null)", result.redirectedExe, result.redirectedWorkDir, result.modifiedCmdLine);
+        return result;
+    }
+
     // ── SpawnProcess Detours hook ─────────────────────────────────────────────
     // Intercepts CUser_SpawnProcess to manage OnlineFix routing, SteamStub auto-detection,
     // preflight tickets, and Spacewar (480) appid rewrites cleanly via Detours instead of VEH.
@@ -394,6 +596,13 @@ namespace {
         if (!SafeValidateString(exePath)) exePath = nullptr;
         if (!SafeValidateString(cmdLine)) cmdLine = nullptr;
         if (!SafeValidateString(workDir)) workDir = nullptr;
+
+        PlayBtnConfig playBtn = ParseAndResolvePlayBtn(exePath, cmdLine, workDir);
+        if (playBtn.active) {
+            exePath = playBtn.redirectedExe.c_str();
+            workDir = playBtn.redirectedWorkDir.c_str();
+            cmdLine = playBtn.modifiedCmdLine.c_str();
+        }
 
         AppId_t appId = static_cast<AppId_t>(gameIdVal & 0xFFFFFF);
 
@@ -505,7 +714,7 @@ namespace {
                            routeThrough480 ? "(internal)" : "");
         }
 
-        return oSpawnProcess(pCUser, pExePath, pCommandLine, pWorkingDir, pGameID, a6, a7, a8, a9, a10, a11, a12, a13, a14);
+        return oSpawnProcess(pCUser, exePath, cmdLine, workDir, pGameID, a6, a7, a8, a9, a10, a11, a12, a13, a14);
     }
 
     // ── MarkLicenseAsChanged Detours hook ────────────────────────────────────
