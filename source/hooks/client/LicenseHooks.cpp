@@ -73,6 +73,12 @@ namespace {
 
     CloudPolicy GetCloudPolicy(AppId_t appId) {
         CloudPolicy policy{};
+        if (appId == kOnlineFixAppId) {
+            policy.block = true;
+            policy.ownershipClass = "onlinefix-spacewar";
+            return policy;
+        }
+
         policy.managed = LuaLoader::HasDepot(appId);
         policy.tracked = LuaLoader::IsLuaTrackedApp(appId);
         policy.owned = LuaLoader::IsOwned(appId);
