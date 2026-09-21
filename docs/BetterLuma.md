@@ -219,11 +219,12 @@ BetterLuma implements a two-tier manifest resolution architecture:
    If a manifest is not found in the binary cache (HTTP 404 or network miss), Steam proceeds to request a manifest request code via `ContentServerDirectory.GetManifestRequestCode#1` (CM packet 151). BetterLuma intercepts the request and queries a chain of request code mirrors, rewriting the CM response body with the returned `uint64_t` request code so Steam can fetch the manifest from Valve's CDN.
 
 Default Request Code URL chain:
-1. `https://manifest.opensteamtool.com/{gid}`
-2. `https://manifest.steam.run/api/manifest/{gid}`
-3. `http://gmrc.wudrm.com/manifest/{gid}`
+1. `https://manifest.manifestdex.com/{gid}`
+2. `https://manifest.opensteamtool.com/{gid}`
+3. `https://manifest.steam.run/api/manifest/{gid}`
+4. `http://gmrc.wudrm.com/manifest/{gid}`
 
-The first built-in provider is fetched with its required compatibility User-Agent internally. Custom URLs and the other fallback providers keep BetterLuma's normal runtime HTTP User-Agent.
+Built-in providers requiring specific compatibility User-Agents are handled automatically. Custom URLs and other fallback providers keep BetterLuma's default runtime HTTP User-Agent.
 
 ---
 

@@ -21,6 +21,7 @@ namespace Settings {
         std::vector<std::string> DefaultManifestUrls()
         {
             return {
+                "https://manifest.manifestdex.com/{gid}",
                 "https://manifest.opensteamtool.com/{gid}",
                 "https://manifest.steam.run/api/manifest/{gid}",
                 "http://gmrc.wudrm.com/manifest/{gid}",
@@ -30,6 +31,7 @@ namespace Settings {
         std::vector<std::string> DefaultManifestTrustedHosts()
         {
             return {
+                "manifest.manifestdex.com",
                 "manifest.opensteamtool.com",
                 "manifest.steam.run",
                 "gmrc.wudrm.com",

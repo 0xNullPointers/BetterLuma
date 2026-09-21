@@ -81,6 +81,7 @@ namespace Settings {
     // by Settings::Load: when present it OVERRIDES the chain (single-URL mode).
     // [manifest_fetch] urls = [...] takes precedence over the single form.
     inline std::vector<std::string> manifestFetchUrls = {
+        "https://manifest.manifestdex.com/{gid}",
         "https://manifest.opensteamtool.com/{gid}",
         "https://manifest.steam.run/api/manifest/{gid}",
         "http://gmrc.wudrm.com/manifest/{gid}",

@@ -33,8 +33,9 @@ trusted_hosts = [
 [manifest_fetch]
 # URL chain for depot manifest downloads, tried in order until one returns 200.
 # {gid} is replaced with the manifest GID at request time.
-# The first built-in provider needs a compatibility User-Agent; BetterLuma adds it internally.
+# Built-in providers needing compatibility User-Agents are handled internally.
 urls = [
+    "https://manifest.manifestdex.com/{gid}",
     "https://manifest.opensteamtool.com/{appid}/{depotid}/{gid}",
     "https://manifest.opensteamtool.com/{gid}",
     "https://manifest.steam.run/api/manifest/{gid}",
@@ -44,6 +45,7 @@ urls = [
 timeout_sec = 12
 # Trusted host allowlist - responses from other hosts are rejected
 trusted_hosts = [
+    "manifest.manifestdex.com",
     "manifest.opensteamtool.com",
     "manifest.steam.run",
     "gmrc.wudrm.com",

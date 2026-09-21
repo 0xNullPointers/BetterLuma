@@ -137,8 +137,15 @@ namespace {
         return host;
     }
 
-    bool UsesProviderCompatAgent(std::string_view url) {
-        return EqualsIgnoreCase(ExtractHost(url), "manifest.opensteamtool.com");
+    std::wstring_view ResolveProviderUserAgent(std::string_view url) {
+        std::string_view host = ExtractHost(url);
+        if (EqualsIgnoreCase(host, "manifest.opensteamtool.com")) {
+            return L"OpenSteamTool/1.0";
+        }
+        if (EqualsIgnoreCase(host, "manifest.manifestdex.com")) {
+            return L"ManifestDeX/1.0";
+        }
+        return L"BetterLuma-RuntimeHttp/1.0";
     }
 
     std::optional<uint64_t> RunOnce(uint64_t gid, uint32_t appId, uint32_t depotId) {
@@ -184,10 +191,9 @@ namespace {
             if (httpTimeoutMs > 3000) httpTimeoutMs = 3000;
 
             RuntimeHttp::Response resp{};
+            const auto userAgent = ResolveProviderUserAgent(url);
             for (int attempt = 0; attempt < 2; ++attempt) {
-                resp = UsesProviderCompatAgent(url)
-                    ? RuntimeHttp::Get(url, L"OpenSteamTool/1.0", 8u * 1024u * 1024u, httpTimeoutMs)
-                    : RuntimeHttp::Get(url, L"BetterLuma-RuntimeHttp/1.0", 8u * 1024u * 1024u, httpTimeoutMs);
+                resp = RuntimeHttp::Get(url, userAgent, 8u * 1024u * 1024u, httpTimeoutMs);
                 if (!resp.networkError && resp.status == 429 && attempt == 0) {
                     LOG_MANIFESTCH_WARN("ManifestFetch: gid={} provider {} HTTP=429 "
                                         "body_bytes={}, retrying once",
