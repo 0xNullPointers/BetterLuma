@@ -35,12 +35,31 @@ else()
     endif()
 endif()
 
+# Generate patched creatwth.cpp to enable 64-bit -> 32-bit cross-bitness injection
+set(DETOURS_CREATWTH_PATCHED "${CMAKE_CURRENT_BINARY_DIR}/detours_creatwth.cpp")
+file(READ "${detours_SOURCE_DIR}/src/creatwth.cpp" _creatwth_content)
+string(REPLACE "\r\n" "\n" _creatwth_content "${_creatwth_content}")
+
+set(_t1 "#if DETOURS_32BIT\n#define DWORD_XX                        DWORD32")
+set(_r1 "#if 1\n#define DWORD_XX                        DWORD32")
+string(REPLACE "${_t1}" "${_r1}" _creatwth_content "${_creatwth_content}")
+
+set(_t2 "#elif defined(DETOURS_64BIT)\n    if (bIs32BitProcess || bIs32BitExe) {\n        // Can't detour a 32-bit process with 64-bit code.\n        SetLastError(ERROR_INVALID_HANDLE);\n        return FALSE;\n    }")
+set(_r2 "#elif defined(DETOURS_64BIT)\n    if (bIs32BitProcess || bIs32BitExe) {\n        if (!UpdateImports32(hProcess, hModule, rlpDlls, nDlls)) {\n            return FALSE;\n        }\n    }")
+string(REPLACE "${_t2}" "${_r2}" _creatwth_content "${_creatwth_content}")
+
+if(NOT _creatwth_content MATCHES "UpdateImports32\\(hProcess")
+    message(FATAL_ERROR "Detours patch failed: upstream creatwth.cpp signature changed.")
+endif()
+
+file(WRITE "${DETOURS_CREATWTH_PATCHED}" "${_creatwth_content}")
+
 add_library(detours STATIC
     ${detours_SOURCE_DIR}/src/detours.cpp
     ${detours_SOURCE_DIR}/src/modules.cpp
     ${detours_SOURCE_DIR}/src/disasm.cpp
     ${detours_SOURCE_DIR}/src/image.cpp
-    ${detours_SOURCE_DIR}/src/creatwth.cpp
+    ${DETOURS_CREATWTH_PATCHED}
     ${DETOURS_ARCH_SRC}
 )
 target_include_directories(detours PUBLIC "${detours_SOURCE_DIR}/src")

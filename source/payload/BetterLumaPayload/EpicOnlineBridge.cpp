@@ -16,6 +16,7 @@ namespace {
 
     EOS_Connect_Login_t          oLogin          = nullptr;
     EOS_Connect_CreateDeviceId_t oCreateDeviceId = nullptr;
+    EOS_Connect_DeleteDeviceId_t oDeleteDeviceId = nullptr;
     EOS_IPOContainer_Add_t       oIPOAdd         = nullptr;
     EOS_Lobby_OpFn_t             oCreateLobby    = nullptr;
     EOS_Lobby_OpFn_t             oJoinLobby      = nullptr;
@@ -33,6 +34,12 @@ namespace {
         if (!sa) sa = GetModuleHandleW(L"steam_api.dll");
 
         auto pFriends = sa ? reinterpret_cast<void* (*)()>(GetProcAddress(sa, "SteamFriends")) : nullptr;
+        if (!pFriends && sa) {
+            for (const char* v : { "SteamAPI_SteamFriends_v017", "SteamAPI_SteamFriends_v016", "SteamAPI_SteamFriends_v015" }) {
+                pFriends = reinterpret_cast<void* (*)()>(GetProcAddress(sa, v));
+                if (pFriends) break;
+            }
+        }
         auto pName    = sa ? reinterpret_cast<const char* (*)(void*)>(GetProcAddress(sa, "SteamAPI_ISteamFriends_GetPersonaName")) : nullptr;
 
         void* friends = pFriends ? pFriends() : nullptr;
@@ -40,7 +47,7 @@ namespace {
         return (name && *name) ? name : "Unknown Player";
     }
 
-    void OnLoginDone(const EOS_Connect_LoginCallbackInfo* info) {
+    void EOS_CALL OnLoginDone(const EOS_Connect_LoginCallbackInfo* info) {
         auto* ctx = static_cast<LoginCtx*>(info->ClientData);
         EOS_Connect_LoginCallbackInfo out = *info;
         out.ClientData = ctx->cbData;
@@ -48,7 +55,7 @@ namespace {
         delete ctx;
     }
 
-    void OnCreateDeviceIdDone(const EOS_Connect_CreateDeviceIdCallbackInfo* info) {
+    void EOS_CALL OnCreateDeviceIdDone(const EOS_Connect_CreateDeviceIdCallbackInfo* info) {
         auto* ctx = static_cast<LoginCtx*>(info->ClientData);
         const bool ready = info->ResultCode == EOS_Success
                         || info->ResultCode == EOS_DuplicateNotAllowed;
@@ -67,15 +74,15 @@ namespace {
         oLogin(ctx->handle, &opts, ctx, OnLoginDone);
     }
 
-    void hkLogin(EOS_HConnect h, const EOS_Connect_LoginOptions*,
-                 void* cbData, EOS_Connect_OnLoginCb cb)
+    void EOS_CALL hkLogin(EOS_HConnect h, const EOS_Connect_LoginOptions*,
+                          void* cbData, EOS_Connect_OnLoginCb cb)
     {
         auto* ctx = new LoginCtx{ h, cb, cbData, SteamPersonaName() };
         EOS_Connect_CreateDeviceIdOptions create{ 1, "PC" };
         oCreateDeviceId(h, &create, ctx, OnCreateDeviceIdDone);
     }
 
-    EOS_EResult hkIPOAdd(EOS_HIntegratedPlatformOptionsContainer, const void*) {
+    EOS_EResult EOS_CALL hkIPOAdd(EOS_HIntegratedPlatformOptionsContainer, const void*) {
         return EOS_Success;
     }
 
@@ -87,22 +94,36 @@ namespace {
         if (*flag) *flag = 0;
     }
 
-    void hkCreateLobby(EOS_HLobby h, const void* opts, void* cd, void* cb) {
+    void EOS_CALL hkCreateLobby(EOS_HLobby h, const void* opts, void* cd, void* cb) {
         StripPresence(opts, offsetof(EOS_Lobby_CreateLobbyOptions_Partial, bPresenceEnabled), 2);
         oCreateLobby(h, opts, cd, cb);
     }
-    void hkJoinLobby(EOS_HLobby h, const void* opts, void* cd, void* cb) {
+    void EOS_CALL hkJoinLobby(EOS_HLobby h, const void* opts, void* cd, void* cb) {
         StripPresence(opts, offsetof(EOS_Lobby_JoinLobbyOptions_Partial, bPresenceEnabled), 2);
         oJoinLobby(h, opts, cd, cb);
     }
-    void hkJoinLobbyById(EOS_HLobby h, const void* opts, void* cd, void* cb) {
+    void EOS_CALL hkJoinLobbyById(EOS_HLobby h, const void* opts, void* cd, void* cb) {
         StripPresence(opts, offsetof(EOS_Lobby_JoinLobbyByIdOptions_Partial, bPresenceEnabled), 1);
         oJoinLobbyById(h, opts, cd, cb);
     }
 
+    void EOS_CALL hkDeleteDeviceId(EOS_HConnect, const void*, void* cbData, EOS_Connect_OnDeleteDeviceIdCb cb) {
+        PayloadLog::Write("EOS_Connect_DeleteDeviceId suppressed (preserving device credentials)");
+        if (cb) {
+            EOS_Connect_DeleteDeviceIdCallbackInfo info{ EOS_Success, cbData };
+            cb(&info);
+        }
+    }
+
     template <typename Fn>
-    bool Resolve(HMODULE m, const char* name, Fn& slot) {
+    bool Resolve(HMODULE m, const char* name, Fn& slot, int paramBytes = -1) {
         slot = reinterpret_cast<Fn>(GetProcAddress(m, name));
+#if !defined(_WIN64)
+        if (!slot && paramBytes >= 0) {
+            std::string decorated = "_" + std::string(name) + "@" + std::to_string(paramBytes);
+            slot = reinterpret_cast<Fn>(GetProcAddress(m, decorated.c_str()));
+        }
+#endif
         if (!slot) PayloadLog::Write(std::string("missing EOS export: ") + name);
         return slot != nullptr;
     }
@@ -113,12 +134,12 @@ namespace EosBridge {
         bool expected = false;
         if (!eos || !g_installed.compare_exchange_strong(expected, true)) return;
 
-        bool ok = Resolve(eos, "EOS_Connect_Login",                          oLogin)
-                & Resolve(eos, "EOS_Connect_CreateDeviceId",                 oCreateDeviceId)
-                & Resolve(eos, "EOS_IntegratedPlatformOptionsContainer_Add", oIPOAdd)
-                & Resolve(eos, "EOS_Lobby_CreateLobby",                      oCreateLobby)
-                & Resolve(eos, "EOS_Lobby_JoinLobby",                        oJoinLobby)
-                & Resolve(eos, "EOS_Lobby_JoinLobbyById",                    oJoinLobbyById);
+        bool ok = Resolve(eos, "EOS_Connect_Login",                          oLogin, 16)
+                & Resolve(eos, "EOS_Connect_CreateDeviceId",                 oCreateDeviceId, 16)
+                & Resolve(eos, "EOS_IntegratedPlatformOptionsContainer_Add", oIPOAdd, 8)
+                & Resolve(eos, "EOS_Lobby_CreateLobby",                      oCreateLobby, 16)
+                & Resolve(eos, "EOS_Lobby_JoinLobby",                        oJoinLobby, 16)
+                & Resolve(eos, "EOS_Lobby_JoinLobbyById",                    oJoinLobbyById, 16);
         if (!ok) { g_installed.store(false); return; }
 
         DetourTransactionBegin();
@@ -128,6 +149,9 @@ namespace EosBridge {
         DetourAttach(reinterpret_cast<PVOID*>(&oCreateLobby),   reinterpret_cast<PVOID>(hkCreateLobby));
         DetourAttach(reinterpret_cast<PVOID*>(&oJoinLobby),     reinterpret_cast<PVOID>(hkJoinLobby));
         DetourAttach(reinterpret_cast<PVOID*>(&oJoinLobbyById), reinterpret_cast<PVOID>(hkJoinLobbyById));
+        if (Resolve(eos, "EOS_Connect_DeleteDeviceId", oDeleteDeviceId, 16)) {
+            DetourAttach(reinterpret_cast<PVOID*>(&oDeleteDeviceId), reinterpret_cast<PVOID>(hkDeleteDeviceId));
+        }
         // retry commit up to 3 times with backoff - detours can transiently fail
         // if steam is modifying the same code page during startup
         LONG err = NO_ERROR;

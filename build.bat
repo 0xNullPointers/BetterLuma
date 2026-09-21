@@ -3,6 +3,7 @@ setlocal EnableDelayedExpansion
 
 set "SOURCE_DIR=%~dp0source"
 set "BUILD_DIR=%~dp0build"
+set "BUILD_DIR_X86=%~dp0build_x86"
 set "OUT_DIR=%~dp0Releases"
 set "LOG_FILE=%~dp0build_log.txt"
 > "%LOG_FILE%" echo BetterLuma build started %DATE% %TIME%
@@ -31,7 +32,8 @@ echo.
 echo ============================================================
 echo  BetterLuma Build
 echo  Source  : %SOURCE_DIR%
-echo  Build   : %BUILD_DIR%
+echo  Build x64 : %BUILD_DIR%
+echo  Build x86 : %BUILD_DIR_X86%
 echo  Output  : %OUT_DIR%
 echo  Release : %BUILD_RELEASE%   Debug: %BUILD_DEBUG%
 if "%DO_CLEAN%"=="1" ( echo  Clean  : YES ) else ( echo  Clean  : NO incremental )
@@ -56,6 +58,9 @@ if "%DO_CLEAN%"=="1" (
                 exit /b 1
             )
         )
+    )
+    if exist "%BUILD_DIR_X86%\NUL" (
+        rmdir /S /Q "%BUILD_DIR_X86%" >> "%LOG_FILE%" 2>&1
     )
 ) else (
     echo [INFO] Incremental build. Pass --clean for full clean.
@@ -89,12 +94,14 @@ if !errorlevel! neq 0 (
 :: --- Pick generator -------------------------------------------------------
 set "GENERATOR=Visual Studio 17 2022"
 set "GEN_ARGS=-A x64"
+set "GEN_ARGS_X86=-A Win32"
 where ninja >nul 2>&1
 if !errorlevel! == 0 (
     where cl >nul 2>&1
     if !errorlevel! == 0 (
         set "GENERATOR=Ninja Multi-Config"
         set "GEN_ARGS="
+        set "GEN_ARGS_X86="
         echo [INFO] Using Ninja Multi-Config generator
     ) else (
         echo [INFO] Ninja found but cl.exe not in PATH, using Visual Studio 17 2022 generator
@@ -104,13 +111,25 @@ if !errorlevel! == 0 (
 )
 
 :: --- Configure ------------------------------------------------------------
-echo [STEP] Configuring...
+echo [STEP] Configuring x64...
 >> "%LOG_FILE%" echo.
->> "%LOG_FILE%" echo [STEP] Configuring...
+>> "%LOG_FILE%" echo [STEP] Configuring x64...
 mkdir "%BUILD_DIR%" 2>nul
 "!CMAKE_EXE!" -S "%SOURCE_DIR%" -B "%BUILD_DIR%" -G "!GENERATOR!" !GEN_ARGS! >> "%LOG_FILE%" 2>&1
 if !errorlevel! neq 0 (
-    echo [ERROR] Configure failed.
+    echo [ERROR] Configure x64 failed.
+    type "%LOG_FILE%"
+    if "%NO_PAUSE%"=="0" pause
+    exit /b 1
+)
+
+echo [STEP] Configuring x86 Payload32...
+>> "%LOG_FILE%" echo.
+>> "%LOG_FILE%" echo [STEP] Configuring x86 Payload32...
+mkdir "%BUILD_DIR_X86%" 2>nul
+"!CMAKE_EXE!" -S "%SOURCE_DIR%" -B "%BUILD_DIR_X86%" -G "!GENERATOR!" !GEN_ARGS_X86! -DBETTERLUMA_PAYLOAD_ONLY=ON >> "%LOG_FILE%" 2>&1
+if !errorlevel! neq 0 (
+    echo [ERROR] Configure x86 failed.
     type "%LOG_FILE%"
     if "%NO_PAUSE%"=="0" pause
     exit /b 1
@@ -121,24 +140,42 @@ set "BUILD_FAILED=0"
 
 if "%BUILD_RELEASE%"=="1" (
     echo.
-    echo [STEP] Building Release...
+    echo [STEP] Building Release x64...
     >> "%LOG_FILE%" echo.
-    >> "%LOG_FILE%" echo [STEP] Building Release...
+    >> "%LOG_FILE%" echo [STEP] Building Release x64...
     "!CMAKE_EXE!" --build "%BUILD_DIR%" --config Release --parallel >> "%LOG_FILE%" 2>&1
     if !errorlevel! neq 0 (
-        echo [WARN] Release build failed.
+        echo [WARN] Release x64 build failed.
+        set "BUILD_FAILED=1"
+    )
+
+    echo [STEP] Building Release x86 Payload...
+    >> "%LOG_FILE%" echo.
+    >> "%LOG_FILE%" echo [STEP] Building Release x86 Payload...
+    "!CMAKE_EXE!" --build "%BUILD_DIR_X86%" --config Release --parallel >> "%LOG_FILE%" 2>&1
+    if !errorlevel! neq 0 (
+        echo [WARN] Release x86 build failed.
         set "BUILD_FAILED=1"
     )
 )
 
 if "%BUILD_DEBUG%"=="1" (
     echo.
-    echo [STEP] Building Debug...
+    echo [STEP] Building Debug x64...
     >> "%LOG_FILE%" echo.
-    >> "%LOG_FILE%" echo [STEP] Building Debug...
+    >> "%LOG_FILE%" echo [STEP] Building Debug x64...
     "!CMAKE_EXE!" --build "%BUILD_DIR%" --config Debug --parallel >> "%LOG_FILE%" 2>&1
     if !errorlevel! neq 0 (
-        echo [WARN] Debug build failed.
+        echo [WARN] Debug x64 build failed.
+        set "BUILD_FAILED=1"
+    )
+
+    echo [STEP] Building Debug x86 Payload...
+    >> "%LOG_FILE%" echo.
+    >> "%LOG_FILE%" echo [STEP] Building Debug x86 Payload...
+    "!CMAKE_EXE!" --build "%BUILD_DIR_X86%" --config Debug --parallel >> "%LOG_FILE%" 2>&1
+    if !errorlevel! neq 0 (
+        echo [WARN] Debug x86 build failed.
         set "BUILD_FAILED=1"
     )
 )
@@ -160,6 +197,9 @@ if "%BUILD_RELEASE%"=="1" (
         if exist "%BUILD_DIR%\Release\BetterLumaPayload.dll" (
             copy /Y "%BUILD_DIR%\Release\BetterLumaPayload.dll" "%OUT_DIR%\Release\" >nul
         )
+        if exist "%BUILD_DIR_X86%\Release\BetterLumaPayload32.dll" (
+            copy /Y "%BUILD_DIR_X86%\Release\BetterLumaPayload32.dll" "%OUT_DIR%\Release\" >nul
+        )
         echo [OK] Release DLLs copied to %OUT_DIR%\Release
     ) else (
         echo [SKIP] Release BetterLuma.dll not produced.
@@ -178,6 +218,9 @@ if "%BUILD_DEBUG%"=="1" (
         )
         if exist "%BUILD_DIR%\Debug\BetterLumaPayload.dll" (
             copy /Y "%BUILD_DIR%\Debug\BetterLumaPayload.dll" "%OUT_DIR%\Debug\" >nul
+        )
+        if exist "%BUILD_DIR_X86%\Debug\BetterLumaPayload32.dll" (
+            copy /Y "%BUILD_DIR_X86%\Debug\BetterLumaPayload32.dll" "%OUT_DIR%\Debug\" >nul
         )
         echo [OK] Debug DLLs copied to %OUT_DIR%\Debug
     ) else (

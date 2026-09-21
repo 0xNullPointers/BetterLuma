@@ -252,6 +252,7 @@ namespace CoreInit {
             sprintf_s(LuaDir,          MAX_PATH, "%s\\config\\stplug-in",   SteamInstallPath);
             sprintf_s(ConfigPath,      MAX_PATH, "%s\\BetterLuma.toml",     SteamInstallPath);
             sprintf_s(PayloadPath,     MAX_PATH, "%s\\BetterLumaPayload.dll", SteamInstallPath);
+            sprintf_s(PayloadPath32,   MAX_PATH, "%s\\BetterLumaPayload32.dll", SteamInstallPath);
             // ensure bin\ directory exists before copying
             char binDir[MAX_PATH];
             sprintf_s(binDir, MAX_PATH, "%s\\bin", SteamInstallPath);

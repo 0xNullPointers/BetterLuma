@@ -30,6 +30,28 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release")
 
+option(BETTERLUMA_PAYLOAD_ONLY "Build only BetterLumaPayload (used for Win32/x86 build)" OFF)
+if(BETTERLUMA_PAYLOAD_ONLY)
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+    include(LcDetours)
+    add_library(BetterLumaPayload SHARED
+        payload/BetterLumaPayload/BetterLumaPayloadEntry.cpp
+        payload/BetterLumaPayload/LcPayloadLogging.cpp
+        payload/BetterLumaPayload/EpicOnlineBridge.cpp
+        payload/BetterLumaPayload/PayloadPropagator.cpp
+    )
+    set_target_properties(BetterLumaPayload PROPERTIES PREFIX "" OUTPUT_NAME "BetterLumaPayload32")
+    target_include_directories(BetterLumaPayload PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/payload/BetterLumaPayload
+    )
+    target_link_libraries(BetterLumaPayload PRIVATE detours psapi)
+    target_compile_definitions(BetterLumaPayload PRIVATE
+        $<$<CONFIG:Debug>:BETTERLUMA_PAYLOAD_LOGGING_ENABLED>
+    )
+    return()
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(LcLua)
 include(LcDetours)

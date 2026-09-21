@@ -357,9 +357,8 @@ namespace {
 
         BOOL isWow64 = FALSE;
         if (IsWow64Process(hProcess, &isWow64) && isWow64) {
-            LOG_ONLINEFIX_WARN("InjectPayload: target process is 32-bit (WOW64); "
-                               "64-bit payload cannot be loaded");
-            return false;
+            dllPath = PayloadPath32;
+            LOG_ONLINEFIX_INFO("InjectPayload: target process is 32-bit (WOW64); selecting 32-bit payload \"{}\"", dllPath);
         }
 
         // Convert path to 8.3 short path to ensure it consists strictly of 7-bit ASCII characters.
@@ -649,7 +648,13 @@ namespace OnlineFixInject {
             }
         }
 
-        if (PayloadPath[0] == 0) {
+        const char* targetDll = PayloadPath;
+        if (RemoteTools::DetectBits(pid) == RemoteTools::ProcessBits::X86) {
+            targetDll = PayloadPath32;
+            LOG_ONLINEFIX_INFO("fallback appid={} pid={} target process is 32-bit (WOW64); selecting 32-bit payload \"{}\"", queuedAppId, pid, targetDll);
+        }
+
+        if (targetDll[0] == 0) {
             LOG_ONLINEFIX_WARN("fallback appid={} pid={} payload path empty", queuedAppId, pid);
             HookStatus::RecordOnlineFixPayload(queuedAppId, pid, ImageForLog(imageName),
                                                 "fallback-failed", "payload-empty");
@@ -661,16 +666,16 @@ namespace OnlineFixInject {
                                                 "fallback-disabled", "config");
             return false;
         }
-        if (GetFileAttributesA(PayloadPath) == INVALID_FILE_ATTRIBUTES) {
+        if (GetFileAttributesA(targetDll) == INVALID_FILE_ATTRIBUTES) {
             LOG_ONLINEFIX_WARN("fallback appid={} pid={} payload DLL missing path=\"{}\"",
-                               queuedAppId, pid, PayloadPath);
+                               queuedAppId, pid, targetDll);
             HookStatus::RecordOnlineFixPayload(queuedAppId, pid, ImageForLog(imageName),
                                                 "fallback-failed", "payload-missing");
             return false;
         }
 
         RemoteTools::LoadResult loaded =
-            RemoteTools::LoadLibraryInto(pid, std::filesystem::path(PayloadPath));
+            RemoteTools::LoadLibraryInto(pid, std::filesystem::path(targetDll));
         if (loaded.ok) {
             LOG_ONLINEFIX_INFO("fallback appid={} pid={} payload {}",
                                queuedAppId, pid,

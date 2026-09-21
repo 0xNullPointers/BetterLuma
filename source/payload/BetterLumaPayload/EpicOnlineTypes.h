@@ -49,6 +49,10 @@ struct EOS_Connect_CreateDeviceIdCallbackInfo {
     EOS_EResult ResultCode;
     void*       ClientData;
 };
+struct EOS_Connect_DeleteDeviceIdCallbackInfo {
+    EOS_EResult ResultCode;
+    void*       ClientData;
+};
 
 struct EOS_Lobby_CreateLobbyOptions_Partial {
     int32_t           ApiVersion;
@@ -72,10 +76,18 @@ struct EOS_Lobby_JoinLobbyByIdOptions_Partial {
 
 #pragma pack(pop)
 
-using EOS_Connect_OnLoginCb          = void(*)(const EOS_Connect_LoginCallbackInfo*);
-using EOS_Connect_OnCreateDeviceIdCb = void(*)(const EOS_Connect_CreateDeviceIdCallbackInfo*);
+#if defined(_WIN32) && !defined(_WIN64)
+#define EOS_CALL __stdcall
+#else
+#define EOS_CALL
+#endif
 
-using EOS_Connect_Login_t          = void(*)(EOS_HConnect, const EOS_Connect_LoginOptions*, void*, EOS_Connect_OnLoginCb);
-using EOS_Connect_CreateDeviceId_t = void(*)(EOS_HConnect, const EOS_Connect_CreateDeviceIdOptions*, void*, EOS_Connect_OnCreateDeviceIdCb);
-using EOS_IPOContainer_Add_t       = EOS_EResult(*)(EOS_HIntegratedPlatformOptionsContainer, const void*);
-using EOS_Lobby_OpFn_t             = void(*)(EOS_HLobby, const void*, void*, void*);
+using EOS_Connect_OnLoginCb          = void(EOS_CALL *)(const EOS_Connect_LoginCallbackInfo*);
+using EOS_Connect_OnCreateDeviceIdCb = void(EOS_CALL *)(const EOS_Connect_CreateDeviceIdCallbackInfo*);
+using EOS_Connect_OnDeleteDeviceIdCb = void(EOS_CALL *)(const EOS_Connect_DeleteDeviceIdCallbackInfo*);
+
+using EOS_Connect_Login_t          = void(EOS_CALL *)(EOS_HConnect, const EOS_Connect_LoginOptions*, void*, EOS_Connect_OnLoginCb);
+using EOS_Connect_CreateDeviceId_t = void(EOS_CALL *)(EOS_HConnect, const EOS_Connect_CreateDeviceIdOptions*, void*, EOS_Connect_OnCreateDeviceIdCb);
+using EOS_Connect_DeleteDeviceId_t = void(EOS_CALL *)(EOS_HConnect, const void*, void*, EOS_Connect_OnDeleteDeviceIdCb);
+using EOS_IPOContainer_Add_t       = EOS_EResult(EOS_CALL *)(EOS_HIntegratedPlatformOptionsContainer, const void*);
+using EOS_Lobby_OpFn_t             = void(EOS_CALL *)(EOS_HLobby, const void*, void*, void*);

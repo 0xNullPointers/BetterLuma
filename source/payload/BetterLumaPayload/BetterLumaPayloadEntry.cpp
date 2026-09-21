@@ -14,7 +14,11 @@
 
 // Detours requires any injected DLL to export ordinal #1 so the Windows loader
 // can link to it when loading the target process imports.
+#if defined(_WIN64)
 #pragma comment(linker, "/export:DetourFinishHelperProcess,@1,NONAME")
+#else
+#pragma comment(linker, "/export:DetourFinishHelperProcess=_DetourFinishHelperProcess@16,@1,NONAME")
+#endif
 
 namespace {
 
@@ -29,12 +33,16 @@ namespace {
     using LdrNotifyFn   = VOID(CALLBACK*)(ULONG, const LDR_DLL_NOTIF*, PVOID);
     using LdrRegisterFn = LONG(NTAPI*)(ULONG, LdrNotifyFn, PVOID, PVOID*);
     constexpr ULONG LDR_LOADED = 1;
-    constexpr wchar_t kEosName[] = L"EOSSDK-Win64-Shipping.dll";
+    bool IsEosDll(const wchar_t* name) {
+        if (!name) return false;
+        return _wcsicmp(name, L"EOSSDK-Win64-Shipping.dll") == 0
+            || _wcsicmp(name, L"EOSSDK-Win32-Shipping.dll") == 0;
+    }
 
     void TryInstall(HMODULE m) {
         wchar_t base[MAX_PATH] = {};
         if (!GetModuleBaseNameW(GetCurrentProcess(), m, base, MAX_PATH)) return;
-        if (_wcsicmp(base, kEosName) == 0) EosBridge::InstallOn(m);
+        if (IsEosDll(base)) EosBridge::InstallOn(m);
     }
 
     VOID CALLBACK OnDllLoad(ULONG reason, const LDR_DLL_NOTIF* d, PVOID) {
@@ -44,7 +52,7 @@ namespace {
         wchar_t buf[MAX_PATH];
         memcpy(buf, d->BaseDllName->Buffer, d->BaseDllName->Length);
         buf[chars] = L'\0';
-        if (_wcsicmp(buf, kEosName) == 0)
+        if (IsEosDll(buf))
             EosBridge::InstallOn(reinterpret_cast<HMODULE>(d->DllBase));
     }
 
