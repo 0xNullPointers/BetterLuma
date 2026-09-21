@@ -4,8 +4,8 @@
 .DESCRIPTION
     Automates downloading the latest BetterLuma release, detecting the Steam
     installation directory, backing up existing conflicting DLLs, opensteamtool.dll,
-    LumaCore.dll, and LumaCorePayload.dll to .bak, deploying BetterLuma.toml, and
-    generating a dynamic uninstaller script.
+    LumaCore.dll, LumaCorePayload.dll, and LumaCorePayload32.dll to .bak, deploying
+    BetterLuma.toml, and generating a dynamic uninstaller script.
 .PARAMETER SteamPath
     Optional custom path to the Steam installation folder. If omitted, the script
     automatically detects Steam exclusively from the Windows Registry.
@@ -108,8 +108,16 @@ Write-Host "[+] Detected Steam Directory: " -NoNewline
 Write-Host "$detectedSteam" -ForegroundColor Green
 
 # Step 2: Handle Running Steam Process
-$steamProcesses = Get-Process -Name "steam" -ErrorAction SilentlyContinue
-if ($steamProcesses) {
+$allSteam = @(Get-Process -Name "steam" -ErrorAction SilentlyContinue)
+$steamProcesses = @($allSteam | Where-Object {
+    try {
+        if ($_.Path) {
+            return (Split-Path -Parent $_.Path) -eq $detectedSteam
+        }
+    } catch {}
+    return $true
+})
+if ($steamProcesses.Count -gt 0) {
     Write-Host ""
     Write-Warning "Steam is currently running (Process IDs: $(($steamProcesses.Id) -join ', '))."
     Write-Warning "Loaded DLL files will be locked while Steam is active."
@@ -196,12 +204,10 @@ if (-not $DownloadUrl) {
 
     Write-Host "[*] Resolving latest BetterLuma $BuildType from GitHub..." -ForegroundColor Cyan
     $DownloadUrl = Get-LatestBetterLumaUrl -Build $BuildType
-} else {
-    $BuildType = "Custom"
 }
 
 $tempRoot = Join-Path $env:TEMP ("BetterLuma_Setup_" + [System.Guid]::NewGuid().ToString("N"))
-$tempZip  = Join-Path $tempRoot "BetterLuma_$BuildType.zip"
+$tempZip  = Join-Path $tempRoot "BetterLuma.zip"
 $tempExt  = Join-Path $tempRoot "Extracted"
 
 New-Item -ItemType Directory -Path $tempExt -Force | Out-Null
@@ -320,21 +326,27 @@ try {
     Write-Host "    $DownloadUrl"
 
     $downloadSuccess = $false
-    try {
-        [BetterLumaFastDownloader]::Download($DownloadUrl, $tempZip, 8)
-        $downloadSuccess = (Test-Path $tempZip) -and ((Get-Item $tempZip).Length -gt 1024)
-    } catch {
-        Write-Warning "Fast multi-threaded downloader encountered an error: $_"
-    }
 
-    if (-not $downloadSuccess) {
-        if (Get-Command 'curl.exe' -ErrorAction SilentlyContinue) {
-            Write-Host "[*] Falling back to native curl.exe..." -ForegroundColor Cyan
-            & curl.exe -L --fail --retry 3 --connect-timeout 10 -o $tempZip $DownloadUrl
-        } else {
-            Write-Host "[*] Falling back to WebClient..." -ForegroundColor Cyan
-            $wc = New-Object System.Net.WebClient
-            $wc.DownloadFile($DownloadUrl, $tempZip)
+    if (Test-Path -LiteralPath $DownloadUrl) {
+        Copy-Item -LiteralPath $DownloadUrl -Destination $tempZip -Force
+        $downloadSuccess = (Test-Path -LiteralPath $tempZip) -and ((Get-Item -LiteralPath $tempZip).Length -gt 0)
+    } else {
+        try {
+            [BetterLumaFastDownloader]::Download($DownloadUrl, $tempZip, 8)
+            $downloadSuccess = (Test-Path -LiteralPath $tempZip) -and ((Get-Item -LiteralPath $tempZip).Length -gt 1024)
+        } catch {
+            Write-Warning "Fast multi-threaded downloader encountered an error: $_"
+        }
+
+        if (-not $downloadSuccess) {
+            if (Get-Command 'curl.exe' -ErrorAction SilentlyContinue) {
+                Write-Host "[*] Falling back to native curl.exe..." -ForegroundColor Cyan
+                & curl.exe -L --fail --retry 3 --connect-timeout 10 -o $tempZip $DownloadUrl
+            } else {
+                Write-Host "[*] Falling back to WebClient..." -ForegroundColor Cyan
+                $wc = New-Object System.Net.WebClient
+                $wc.DownloadFile($DownloadUrl, $tempZip)
+            }
         }
     }
 
@@ -350,7 +362,7 @@ try {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($tempZip, $tempExt)
 
     # Locate extracted DLLs (search top level and immediate subdirectories if any)
-    $extractedDlls = Get-ChildItem -Path $tempExt -Filter "*.dll" -Recurse | Where-Object { -not $_.PSIsContainer }
+    $extractedDlls = @(Get-ChildItem -Path $tempExt -Filter "*.dll" -Recurse | Where-Object { -not $_.PSIsContainer })
     if ($extractedDlls.Count -eq 0) {
         Write-Error "No DLL files found inside the downloaded archive."
         return
@@ -371,15 +383,21 @@ try {
     # BetterLuma files to directly remove and replace
     $replaceWithoutBackup = @(
         'BetterLuma.dll',
-        'BetterLumaPayload.dll'
+        'BetterLumaPayload.dll',
+        'BetterLumaPayload32.dll'
     )
 
     # Clean up existing BetterLuma files directly without creating .bak backups
     foreach ($blFile in $replaceWithoutBackup) {
         $blPath = Join-Path $detectedSteam $blFile
-        if (Test-Path $blPath) {
-            Remove-Item -Path $blPath -Force
+        if (Test-Path -LiteralPath $blPath) {
+            Remove-Item -LiteralPath $blPath -Force
             Write-Host "  [-] Found existing $blFile -> Removed" -ForegroundColor DarkGray
+        }
+        $bakPath = Join-Path $detectedSteam "$blFile.bak"
+        if (Test-Path -LiteralPath $bakPath) {
+            Remove-Item -LiteralPath $bakPath -Force
+            Write-Host "  [-] Found obsolete $blFile.bak -> Removed" -ForegroundColor DarkGray
         }
     }
 
@@ -387,8 +405,20 @@ try {
     $priorityFiles = @(
         'opensteamtool.dll',
         'LumaCore.dll',
-        'LumaCorePayload.dll'
+        'LumaCorePayload.dll',
+        'LumaCorePayload32.dll'
     )
+
+    # Helper: Detect if a target proxy DLL in Steam is already a BetterLuma proxy
+    function Test-IsBetterLumaProxy {
+        param([string]$FilePath)
+        if (-not (Test-Path -LiteralPath $FilePath)) { return $false }
+        try {
+            return [bool](Select-String -Path $FilePath -Pattern "BetterLuma\.dll" -Quiet -Encoding ascii)
+        } catch {
+            return $false
+        }
+    }
 
     # Collect all targets to scan: priority targets + all extracted incoming DLLs
     $targetsToScan = [System.Collections.Generic.List[string]]::new()
@@ -408,23 +438,34 @@ try {
         $bakName    = "$fileName.bak"
         $bakPath    = Join-Path $detectedSteam $bakName
 
-        if (Test-Path $targetFile) {
-            if (-not (Test-Path $bakPath)) {
-                Move-Item -Path $targetFile -Destination $bakPath -Force
+        if (Test-Path -LiteralPath $targetFile) {
+            # Check if this file is our own proxy from an earlier installation (priority backup files are never proxies)
+            $isOwnProxy = (-not $priorityFiles.Contains($fileName)) -and (Test-IsBetterLumaProxy -FilePath $targetFile)
+
+            if ($isOwnProxy) {
+                # This is BetterLuma's proxy. Do not back it up as a conflicting 3rd-party file.
+                Write-Host "  [*] Existing BetterLuma $fileName detected, replacing with updated version" -ForegroundColor DarkGray
+                Remove-Item -LiteralPath $targetFile -Force
+            } elseif (-not (Test-Path -LiteralPath $bakPath)) {
+                # Genuine 3rd-party/conflicting file: safely back up to .bak
+                Move-Item -LiteralPath $targetFile -Destination $bakPath -Force
                 Write-Host "  [!] Found $fileName -> Backed up to $bakName" -ForegroundColor Yellow
             } else {
                 # Preserve the original backup if already existing, replace active file
                 Write-Host "  [*] $bakName already exists, replacing $fileName" -ForegroundColor DarkGray
-                Remove-Item -Path $targetFile -Force
+                Remove-Item -LiteralPath $targetFile -Force
             }
 
-            if ($registeredBaks.Add($bakName)) {
-                $backedUpFiles.Add([PSCustomObject]@{
-                    Original = $fileName
-                    Backup   = $bakName
-                })
+            # Register genuine .bak file for restoration if present
+            if (Test-Path -LiteralPath $bakPath) {
+                if ($registeredBaks.Add($bakName)) {
+                    $backedUpFiles.Add([PSCustomObject]@{
+                        Original = $fileName
+                        Backup   = $bakName
+                    })
+                }
             }
-        } elseif (Test-Path $bakPath) {
+        } elseif (Test-Path -LiteralPath $bakPath) {
             # Active file is not present, but its .bak already exists from previous installation
             if ($registeredBaks.Add($bakName)) {
                 $backedUpFiles.Add([PSCustomObject]@{
@@ -447,23 +488,276 @@ try {
         Write-Host "  [+] Installed: $($dll.Name)" -ForegroundColor Green
     }
 
-    # Step 6: Create BetterLuma.toml Configuration
+    # Step 6: Create or Update BetterLuma.toml Configuration
     Write-Host ""
-    Write-Host "[*] Creating BetterLuma.toml configuration..." -ForegroundColor Cyan
+    Write-Host "[*] Configuring BetterLuma.toml..." -ForegroundColor Cyan
 
-    $tomlContent = @"
-[pattern_fetch]
-url_template = "https://gitlab.com/0xBadCod3/Steam-Auto-PT/-/raw/{channel}/{component}/{sha256}.toml"
+    function Parse-TomlContent([string]$content) {
+        $lines = $content -split '\r?\n'
+        $currentSection = ""
+        $inMultiline = $false
+        $multilineKey = ""
+        $multilineBuffer = [System.Collections.Generic.List[string]]::new()
+        $config = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.Dictionary[string, string]]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
-[cloud]
-enabled = false
-suppressed = true
-library = "cloud_redirect.dll"
-"@
+        foreach ($line in $lines) {
+            $trimmed = $line.Trim()
+            if (-not $inMultiline) {
+                if ($trimmed.StartsWith("#") -or [string]::IsNullOrWhiteSpace($trimmed)) { continue }
+                if ($trimmed -match '^\[([a-zA-Z0-9_\.\-]+)\]$') {
+                    $currentSection = $matches[1]
+                    if (-not $config.ContainsKey($currentSection)) {
+                        $config[$currentSection] = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                    }
+                    continue
+                }
+                if ($trimmed -match '^([a-zA-Z0-9_\-]+)\s*=\s*(.*)$') {
+                    $key = $matches[1]
+                    $val = $matches[2].Trim()
+                    if ($val.StartsWith("[") -and -not (($val -replace '#.*$', '').Trim().EndsWith("]"))) {
+                        $inMultiline = $true
+                        $multilineKey = $key
+                        $multilineBuffer.Clear()
+                        $firstVal = ($line -replace "^[^=]+=\s*", "")
+                        $multilineBuffer.Add($firstVal)
+                    } else {
+                        if ($currentSection) {
+                            $config[$currentSection][$key] = $val
+                        }
+                    }
+                }
+            } else {
+                $multilineBuffer.Add($line)
+                $cleanLine = ($line -replace '#.*$', '').Trim()
+                if ($cleanLine.EndsWith("]")) {
+                    $inMultiline = $false
+                    if ($currentSection) {
+                        $config[$currentSection][$multilineKey] = ($multilineBuffer -join "`r`n")
+                    }
+                }
+            }
+        }
+        return $config
+    }
+
+    function Get-BetterLumaTomlTemplate([string]$ExtractedDir) {
+        # 1. Check if extracted archive contains BetterLuma.toml.example
+        if ($ExtractedDir -and (Test-Path -LiteralPath $ExtractedDir)) {
+            $localExample = Get-ChildItem -Path $ExtractedDir -Filter "BetterLuma.toml.example" -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($localExample) {
+                Write-Host "  [+] Found BetterLuma.toml.example in downloaded archive." -ForegroundColor DarkGray
+                return (Get-Content -LiteralPath $localExample.FullName -Raw)
+            }
+        }
+
+        # 2. Download directly from GitHub
+        $rawUrls = @(
+            "https://raw.githubusercontent.com/0xNullPointers/BetterLuma/main/BetterLuma.toml.example",
+            "https://github.com/0xNullPointers/BetterLuma/raw/main/BetterLuma.toml.example"
+        )
+        Write-Host "  [*] Downloading BetterLuma.toml.example from GitHub..." -ForegroundColor Cyan
+
+        foreach ($url in $rawUrls) {
+            try {
+                $webClient = New-Object System.Net.WebClient
+                $webClient.Headers.Add("User-Agent", "BetterLuma-Installer")
+                $content = $webClient.DownloadString($url)
+                if (-not [string]::IsNullOrWhiteSpace($content) -and $content.Length -gt 100) {
+                    Write-Host "  [+] Successfully fetched BetterLuma.toml.example." -ForegroundColor Green
+                    return $content
+                }
+            } catch {}
+        }
+
+        if (Get-Command 'curl.exe' -ErrorAction SilentlyContinue) {
+            foreach ($url in $rawUrls) {
+                try {
+                    $curlOut = & curl.exe -sSL --fail --connect-timeout 10 $url
+                    if (-not [string]::IsNullOrWhiteSpace($curlOut) -and $curlOut.Length -gt 100) {
+                        Write-Host "  [+] Successfully fetched BetterLuma.toml.example via curl." -ForegroundColor Green
+                        return $curlOut
+                    }
+                } catch {}
+            }
+        }
+
+        throw "Failed to download BetterLuma.toml.example from GitHub."
+    }
+
+    function Merge-BetterLumaToml {
+        param(
+            [string]$TemplateContent,
+            [string]$ExistingContent,
+            [string]$DefaultPatternUrl = "https://gitlab.com/0xBadCod3/Steam-Auto-PT/-/raw/{channel}/{component}/{sha256}.toml"
+        )
+
+        $existingConfig = if ([string]::IsNullOrWhiteSpace($ExistingContent)) {
+            [System.Collections.Generic.Dictionary[string, System.Collections.Generic.Dictionary[string, string]]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        } else {
+            Parse-TomlContent $ExistingContent
+        }
+
+        $templateLines = $TemplateContent -split '\r?\n'
+        $outLines = [System.Collections.Generic.List[string]]::new()
+        $currentSection = ""
+        $inSkipMultiline = $false
+        $appliedKeys = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.HashSet[string]]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+        # Pre-scan template to identify all uncommented keys per section
+        $templateKeysPerSection = [System.Collections.Generic.Dictionary[string, System.Collections.Generic.HashSet[string]]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        $tmpSec = ""
+        foreach ($l in $templateLines) {
+            $t = $l.Trim()
+            if ($t -match '^\[([a-zA-Z0-9_\.\-]+)\]$') {
+                $tmpSec = $matches[1]
+                if (-not $templateKeysPerSection.ContainsKey($tmpSec)) {
+                    $templateKeysPerSection[$tmpSec] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                }
+            } elseif ($tmpSec -and ($t -match '^([a-zA-Z0-9_\-]+)\s*=\s*(.*)$')) {
+                $templateKeysPerSection[$tmpSec].Add($matches[1]) | Out-Null
+            }
+        }
+
+        foreach ($line in $templateLines) {
+            $trimmed = $line.Trim()
+
+            if ($inSkipMultiline) {
+                $cleanLine = ($line -replace '#.*$', '').Trim()
+                if ($cleanLine.EndsWith("]")) {
+                    $inSkipMultiline = $false
+                }
+                continue
+            }
+
+            if ($trimmed -match '^\[([a-zA-Z0-9_\.\-]+)\]$') {
+                $currentSection = $matches[1]
+                if (-not $appliedKeys.ContainsKey($currentSection)) {
+                    $appliedKeys[$currentSection] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                }
+                $outLines.Add($line)
+                continue
+            }
+
+            # Check commented optional key in template (e.g. # hubcap_key = "xxxxxx") that user has set,
+            # but only if this key is NOT already present uncommented in this section of the template
+            if ($currentSection -and ($trimmed -match '^#\s*([a-zA-Z0-9_\-]+)\s*=\s*(.*)$')) {
+                $key = $matches[1]
+                $hasUncommented = $templateKeysPerSection.ContainsKey($currentSection) -and $templateKeysPerSection[$currentSection].Contains($key)
+                if (-not $hasUncommented) {
+                    if ($existingConfig.ContainsKey($currentSection) -and $existingConfig[$currentSection].ContainsKey($key)) {
+                        $userVal = $existingConfig[$currentSection][$key]
+                        $indent = ($line -replace '^(\s*).*$', '$1')
+                        $outLines.Add("${indent}${key} = ${userVal}")
+                        $appliedKeys[$currentSection].Add($key) | Out-Null
+                        continue
+                    }
+                }
+            }
+
+            if ($currentSection -and ($trimmed -match '^([a-zA-Z0-9_\-]+)\s*=\s*(.*)$')) {
+                $key = $matches[1]
+                $val = $matches[2].Trim()
+                $appliedKeys[$currentSection].Add($key) | Out-Null
+
+                $isTemplateMultiline = ($val.StartsWith("[") -and -not (($val -replace '#.*$', '').Trim().EndsWith("]")))
+
+                $userVal = $null
+                if ($existingConfig.ContainsKey($currentSection) -and $existingConfig[$currentSection].ContainsKey($key)) {
+                    $userVal = $existingConfig[$currentSection][$key]
+                }
+
+                # Ensure [pattern_fetch] url_template gets user's value, migrated legacy format, or default pattern url
+                if ($currentSection -eq "pattern_fetch" -and $key -eq "url_template") {
+                    if ([string]::IsNullOrWhiteSpace($userVal) -or $userVal -eq '""' -or $userVal -eq "''") {
+                        if ($existingConfig.ContainsKey("pattern_fetch") -and $existingConfig["pattern_fetch"].ContainsKey("mirror") -and -not [string]::IsNullOrWhiteSpace($existingConfig["pattern_fetch"]["mirror"])) {
+                            $userVal = $existingConfig["pattern_fetch"]["mirror"]
+                            $appliedKeys["pattern_fetch"].Add("mirror") | Out-Null
+                        } elseif ($existingConfig.ContainsKey("remote") -and $existingConfig["remote"].ContainsKey("url_template") -and -not [string]::IsNullOrWhiteSpace($existingConfig["remote"]["url_template"])) {
+                            $userVal = $existingConfig["remote"]["url_template"]
+                            if (-not $appliedKeys.ContainsKey("remote")) {
+                                $appliedKeys["remote"] = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                            }
+                            $appliedKeys["remote"].Add("url_template") | Out-Null
+                        }
+                    }
+                    if ([string]::IsNullOrWhiteSpace($userVal) -or $userVal -eq '""' -or $userVal -eq "''") {
+                        $userVal = "`"$DefaultPatternUrl`""
+                    }
+                }
+
+                if ($userVal -ne $null) {
+                    $indent = ($line -replace '^(\s*).*$', '$1')
+                    $outLines.Add("${indent}${key} = ${userVal}")
+                    if ($isTemplateMultiline) {
+                        $inSkipMultiline = $true
+                    }
+                } else {
+                    if ($currentSection -eq "pattern_fetch" -and $key -eq "url_template" -and ($val -eq '""' -or $val -eq "''")) {
+                        $indent = ($line -replace '^(\s*).*$', '$1')
+                        $outLines.Add("${indent}${key} = `"$DefaultPatternUrl`"")
+                    } else {
+                        $outLines.Add($line)
+                    }
+                }
+                continue
+            }
+
+            $outLines.Add($line)
+        }
+
+        # Append any extra sections/keys from user's existing config that were not in template
+        $extraLines = [System.Collections.Generic.List[string]]::new()
+        foreach ($sec in $existingConfig.Keys) {
+            $missingKeys = [System.Collections.Generic.List[string]]::new()
+            foreach ($k in $existingConfig[$sec].Keys) {
+                if (-not $appliedKeys.ContainsKey($sec) -or -not $appliedKeys[$sec].Contains($k)) {
+                    $missingKeys.Add($k)
+                }
+            }
+            if ($missingKeys.Count -gt 0) {
+                $extraLines.Add("")
+                $extraLines.Add("[$sec]")
+                foreach ($k in $missingKeys) {
+                    $v = $existingConfig[$sec][$k]
+                    $extraLines.Add("${k} = ${v}")
+                }
+            }
+        }
+
+        if ($extraLines.Count -gt 0) {
+            $outLines.AddRange($extraLines)
+        }
+
+        return ($outLines -join "`r`n")
+    }
 
     $tomlPath = Join-Path $detectedSteam "BetterLuma.toml"
-    [System.IO.File]::WriteAllText($tomlPath, $tomlContent, [System.Text.Encoding]::UTF8)
-    Write-Host "  [+] Created BetterLuma.toml" -ForegroundColor Green
+    $hasExistingToml = (Test-Path -LiteralPath $tomlPath)
+    $existingToml = if ($hasExistingToml) {
+        Get-Content -LiteralPath $tomlPath -Raw
+    } else {
+        ""
+    }
+
+    try {
+        $templateToml = Get-BetterLumaTomlTemplate -ExtractedDir $tempExt
+        $mergedToml   = Merge-BetterLumaToml -TemplateContent $templateToml -ExistingContent $existingToml
+
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($tomlPath, $mergedToml, $utf8NoBom)
+
+        if (-not $hasExistingToml) {
+            Write-Host "  [+] Created BetterLuma.toml from official example with Pattern URL" -ForegroundColor Green
+        } else {
+            Write-Host "  [+] Updated BetterLuma.toml (preserved settings and applied new defaults)" -ForegroundColor Green
+        }
+    } catch {
+        if ($hasExistingToml) {
+            Write-Warning "Could not update BetterLuma.toml template ($($_.Exception.Message)). Existing configuration was preserved."
+        } else {
+            throw
+        }
+    }
 
     # Step 7: Generate uninstall-BetterLuma.bat
     Write-Host ""
@@ -523,6 +817,14 @@ library = "cloud_redirect.dll"
     $batLines.Add("    )")
     $batLines.Add(")")
 
+    # Deletion of betterluma runtime directory (logs and cache)
+    $batLines.Add("if exist `"%~dp0betterluma`" (")
+    $batLines.Add("    rmdir /s /q `"%~dp0betterluma`" >nul 2>&1")
+    $batLines.Add("    if not exist `"%~dp0betterluma`" (")
+    $batLines.Add("        echo   [-] Removed: betterluma folder")
+    $batLines.Add("    )")
+    $batLines.Add(")")
+
     $batLines.Add("")
     $batLines.Add("echo [*] Restoring backed up [.bak] files...")
 
@@ -546,7 +848,7 @@ library = "cloud_redirect.dll"
         }
     }
 
-    # Priority target safety check: always restore opensteamtool.dll, LumaCore.dll, LumaCorePayload.dll if .bak exists
+    # Priority target safety check: always restore opensteamtool.dll, LumaCore.dll, LumaCorePayload.dll, LumaCorePayload32.dll if .bak exists
     foreach ($pf in $priorityFiles) {
         if ($restoredInBat.Add($pf)) {
             $pfBak = "$pf.bak"
