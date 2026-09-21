@@ -67,6 +67,8 @@ namespace Settings {
             manifestCacheUrls = DefaultManifestCacheUrls();
             manifestCacheTrustedHosts = DefaultManifestCacheTrustedHosts();
             manifestCacheTimeoutSec = 30;
+            hubcapKey.clear();
+            manifestHubKey.clear();
             statsEnableApi = true;
             processExtensionEnabled = false;
             processExtensionX86.clear();
@@ -218,12 +220,28 @@ namespace Settings {
                     }
                     manifestFetchTrustedHosts = std::move(allow);
                 }
+                if (auto k = (*mfetch)["hubcap_key"].value<std::string>())
+                    hubcapKey = *k;
+                else if (auto k = (*mfetch)["hubcap_api_key"].value<std::string>())
+                    hubcapKey = *k;
+                if (auto k = (*mfetch)["manifesthub_key"].value<std::string>())
+                    manifestHubKey = *k;
+                else if (auto k = (*mfetch)["manifesthub_api_key"].value<std::string>())
+                    manifestHubKey = *k;
             }
 
             // [manifest_cache]
             if (auto mcache = tbl["manifest_cache"].as_table()) {
                 if (auto en = (*mcache)["enabled"].value<bool>())
                     manifestCacheEnabled = *en;
+                if (auto k = (*mcache)["hubcap_key"].value<std::string>())
+                    hubcapKey = *k;
+                else if (auto k = (*mcache)["hubcap_api_key"].value<std::string>())
+                    hubcapKey = *k;
+                if (auto k = (*mcache)["manifesthub_key"].value<std::string>())
+                    manifestHubKey = *k;
+                else if (auto k = (*mcache)["manifesthub_api_key"].value<std::string>())
+                    manifestHubKey = *k;
                 if (auto arr = (*mcache)["urls"].as_array()) {
                     std::vector<std::string> chain;
                     chain.reserve(arr->size());
@@ -247,6 +265,18 @@ namespace Settings {
                     }
                     manifestCacheTrustedHosts = std::move(allow);
                 }
+            }
+
+            // [providers]
+            if (auto prov = tbl["providers"].as_table()) {
+                if (auto k = (*prov)["hubcap_key"].value<std::string>())
+                    hubcapKey = *k;
+                else if (auto k = (*prov)["hubcap_api_key"].value<std::string>())
+                    hubcapKey = *k;
+                if (auto k = (*prov)["manifesthub_key"].value<std::string>())
+                    manifestHubKey = *k;
+                else if (auto k = (*prov)["manifesthub_api_key"].value<std::string>())
+                    manifestHubKey = *k;
             }
 
             // [stats]
@@ -312,13 +342,17 @@ namespace Settings {
                 if (!cacheUrlsLog.empty()) cacheUrlsLog += " | ";
                 cacheUrlsLog += u;
             }
-            if (cacheUrlsLog.empty()) cacheUrlsLog = "<disabled>";
+            std::string keysLog;
+            if (!manifestHubKey.empty()) keysLog += "manifesthub ";
+            if (!hubcapKey.empty()) keysLog += "hubcap ";
+            if (keysLog.empty()) keysLog = "<none>";
+            else if (keysLog.back() == ' ') keysLog.pop_back();
 
             LOG_INFO("Settings: log.level={} log.verbose={} lua.paths_count={} "
                      "pattern_fetch.mirror={} manifest_fetch.urls=[{}] "
                      "manifest_fetch.timeout_sec={} manifest_fetch.trusted_hosts=[{}] "
                      "manifest_cache.enabled={} manifest_cache.urls=[{}] "
-                     "manifest_cache.timeout_sec={} "
+                     "manifest_cache.timeout_sec={} manifest_cache.api_keys=[{}] "
                      "stats.enable_api={} process_extension.enabled={} "
                      "onlinefix.inject_enabled={} steamstub.auto_enabled={} "
                      "cloud.enabled={} cloud.suppressed={} cloud.library={}",
@@ -331,6 +365,7 @@ namespace Settings {
                      manifestCacheEnabled ? "true" : "false",
                      cacheUrlsLog,
                      manifestCacheTimeoutSec,
+                     keysLog,
                      statsEnableApi ? "true" : "false",
                      processExtensionEnabled ? "true" : "false",
                      onlineFixInjectEnabled ? "true" : "false",

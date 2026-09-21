@@ -106,6 +106,9 @@ namespace Settings {
     inline std::vector<std::string> manifestCacheTrustedHosts = {
         "manifest.luastools.xyz",
     };
+    // Provider API keys for manifest cache / request code templates ({hubcap_key}, {manifesthub_key})
+    inline std::string hubcapKey;
+    inline std::string manifestHubKey;
     inline bool statsEnableApi = true;
     inline bool processExtensionEnabled = false;
     inline std::string processExtensionX86;

@@ -81,7 +81,13 @@ namespace {
                 out += std::to_string(gid);
             else if (tag == "appid")
                 out += std::to_string(appId);
-            else
+            else if (EqualsIgnoreCase(tag, "hubcap_key")) {
+                if (Settings::hubcapKey.empty()) return {};
+                out += Settings::hubcapKey;
+            } else if (EqualsIgnoreCase(tag, "manifesthub_key")) {
+                if (Settings::manifestHubKey.empty()) return {};
+                out += Settings::manifestHubKey;
+            } else
                 out.append(tmpl.substr(i, end - i + 1));
             i = end + 1;
         }
@@ -211,6 +217,11 @@ namespace ManifestCache {
             const std::string& tmpl = chain[i];
             if (tmpl.empty()) continue;
             std::string url = ExpandTemplate(tmpl, depotId, gid, appId);
+            if (url.empty()) {
+                LOG_MANIFESTCH_DEBUG("ManifestCache: depot={} gid={} provider {}/{} skipped (required API key not configured)",
+                                     depotId, gid, i + 1, chain.size());
+                continue;
+            }
             std::string_view host = ExtractHost(url);
 
             if (!IsHostAllowed(host, Settings::manifestCacheTrustedHosts)) {
@@ -219,8 +230,23 @@ namespace ManifestCache {
                 continue;
             }
 
+            std::string logUrl = url;
+            for (const char* param : {"apikey=", "api_key="}) {
+                auto keyPos = logUrl.find(param);
+                if (keyPos != std::string::npos) {
+                    size_t pLen = std::strlen(param);
+                    auto ampPos = logUrl.find('&', keyPos);
+                    auto valStart = keyPos + pLen;
+                    if (ampPos != std::string::npos && ampPos > valStart) {
+                        logUrl.replace(valStart, ampPos - valStart, "***");
+                    } else if (logUrl.size() > valStart) {
+                        logUrl.replace(valStart, logUrl.size() - valStart, "***");
+                    }
+                }
+            }
+
             LOG_MANIFESTCH_INFO("ManifestCache: depot={} gid={} provider {}/{} downloading {}",
-                                depotId, gid, i + 1, chain.size(), url);
+                                depotId, gid, i + 1, chain.size(), logUrl);
 
             auto resp = RuntimeHttp::Get(url, L"BetterLuma-ManifestCache/1.0", kManifestMaxCap, timeoutMs);
             if (resp.networkError) {

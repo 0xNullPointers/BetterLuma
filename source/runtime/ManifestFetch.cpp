@@ -91,6 +91,16 @@ namespace {
         return false;
     }
 
+    bool EqualsIgnoreCase(std::string_view a, std::string_view b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            unsigned char ac = static_cast<unsigned char>(a[i]);
+            unsigned char bc = static_cast<unsigned char>(b[i]);
+            if (std::tolower(ac) != std::tolower(bc)) return false;
+        }
+        return true;
+    }
+
     // Substitute {gid}/{appid}/{depotid} into the configured template.
     // Anything else is left as is so a future {branch} placeholder won't
     // explode the existing config.
@@ -106,20 +116,16 @@ namespace {
             if (tag == "gid")          out += std::to_string(gid);
             else if (tag == "appid")   out += std::to_string(appId);
             else if (tag == "depotid") out += std::to_string(depotId);
-            else { out.append(tmpl.substr(i, end - i + 1)); }
+            else if (EqualsIgnoreCase(tag, "hubcap_key")) {
+                if (Settings::hubcapKey.empty()) return {};
+                out += Settings::hubcapKey;
+            } else if (EqualsIgnoreCase(tag, "manifesthub_key")) {
+                if (Settings::manifestHubKey.empty()) return {};
+                out += Settings::manifestHubKey;
+            } else { out.append(tmpl.substr(i, end - i + 1)); }
             i = end + 1;
         }
         return out;
-    }
-
-    bool EqualsIgnoreCase(std::string_view a, std::string_view b) {
-        if (a.size() != b.size()) return false;
-        for (size_t i = 0; i < a.size(); ++i) {
-            unsigned char ac = static_cast<unsigned char>(a[i]);
-            unsigned char bc = static_cast<unsigned char>(b[i]);
-            if (std::tolower(ac) != std::tolower(bc)) return false;
-        }
-        return true;
     }
 
     std::string_view ExtractHost(std::string_view url) {
@@ -183,8 +189,29 @@ namespace {
             const std::string& tmpl = chain[i];
             if (tmpl.empty()) continue;
             std::string url = ExpandTemplate(tmpl, gid, appId, depotId);
+            if (url.empty()) {
+                LOG_MANIFESTCH_DEBUG("ManifestFetch: gid={} provider {}/{} skipped (required API key not configured)",
+                                     gid, i + 1, chain.size());
+                continue;
+            }
+
+            std::string logUrl = url;
+            for (const char* param : {"apikey=", "api_key="}) {
+                auto keyPos = logUrl.find(param);
+                if (keyPos != std::string::npos) {
+                    size_t pLen = std::strlen(param);
+                    auto ampPos = logUrl.find('&', keyPos);
+                    auto valStart = keyPos + pLen;
+                    if (ampPos != std::string::npos && ampPos > valStart) {
+                        logUrl.replace(valStart, ampPos - valStart, "***");
+                    } else if (logUrl.size() > valStart) {
+                        logUrl.replace(valStart, logUrl.size() - valStart, "***");
+                    }
+                }
+            }
+
             LOG_MANIFESTCH_INFO("ManifestFetch: gid={} provider {}/{} GET {}",
-                                gid, i + 1, chain.size(), url);
+                                gid, i + 1, chain.size(), logUrl);
             uint32_t httpTimeoutMs = static_cast<uint32_t>(
                 Settings::manifestFetchTimeoutSec > 0 ? (Settings::manifestFetchTimeoutSec * 1000) / chain.size() : 2500);
             if (httpTimeoutMs < 1000) httpTimeoutMs = 1000;

@@ -19,8 +19,16 @@ paths = []
 # Steam finds the file locally on disk and skips CDN request codes entirely.
 # If a manifest is not found (404), BetterLuma falls back to [manifest_fetch] for request codes.
 # Placeholders: {depotid}, {depot}, {gid}, {manifestid}, {appid}
+# Optional provider key variables for template substitution:
+#   {hubcap_key} - expanded from hubcap_key
+#   {manifesthub_key} - expanded from manifesthub_key
+# Note: Providers with missing required keys are cleanly skipped without wasted network timeouts.
+# hubcap_key = "xxxxxx"
+# manifesthub_key = "xxxxxx"
 enabled = true
 urls = [
+    # "https://hubcapmanifest.com/api/v1/generate/manifest?depot_id={depotid}&manifest_id={gid}&api_key={hubcap_key}",
+    # "https://api.manifesthub2.filegear-sg.me/manifest?apikey={manifesthub_key}&depotid={depotid}&manifestid={gid}",
     "https://manifest.luastools.xyz/m/{depotid}/{gid}",
 ]
 # Max seconds to wait per provider before trying the next one (default 30s for large binary manifests)
@@ -28,6 +36,8 @@ timeout_sec = 30
 # Trusted host allowlist - responses from other hosts are rejected
 trusted_hosts = [
     "manifest.luastools.xyz",
+    "hubcapmanifest.com",
+    "api.manifesthub2.filegear-sg.me",
 ]
 
 [manifest_fetch]
