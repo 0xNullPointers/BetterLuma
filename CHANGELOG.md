@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.5
+
+### Play Button Redirection & Security Hardening (`-playbtn`)
+- **Custom Executable Redirection (`-playbtn="<path>"`)**: Implemented dynamic executable redirection within Steam's `SpawnProcess` Detours hook. Clicking "Play" in Steam can now launch custom frontends, OnlineFix `Launcher.exe`, or script extenders (e.g., SKSE, F4SE) while keeping the original game's Steam Job Object, playtime tracking, Steam overlay, and achievement routing intact.
+- **Filesystem Jail & Security Hardening**: Enforced canonical containment (`std::filesystem::canonical` and `IsSubpath`), strictly restricting `-playbtn` to `.exe` binaries residing within the game's authentic install directory. Completely mitigates path traversal (`..`), symlink/NTFS junction escapes, network UNC shares (`\\`), and Alternate Data Streams (ADS).
+
+### 32-Bit (WOW64) Architecture & Cross-Bitness Injection
+- **Dual-Architecture Payload Delivery (`BetterLumaPayload32.dll`)**: Expanded the payload layer to full 32-bit (x86/WOW64) support. Steam client automatically inspects target process architecture upon spawn and injects the matching 32-bit or 64-bit payload module via PE import directory rewriting.
+- **Decorated Export Demangling & Calling Convention Alignment**: Implemented automatic resolution of `__stdcall` decorated exports (`_Name@N`) for 32-bit `EOSSDK-Win32-Shipping.dll` alongside standard 64-bit exports, ensuring seamless hook binding across both architectures.
+- **Versioned Steam Persona Fallback**: Integrated multi-version fallback resolution for `ISteamFriends` (`SteamAPI_SteamFriends_v017` / `v016` / `v015`), maintaining persona name synchronization across legacy and modern Steamworks binaries.
+- **Zero-Footprint CMake Detours Patching**: Automated 32-bit import update patching (`UpdateImports32`) via CMake configure-time string replacement with fail-loud validation, eliminating third-party source duplication in the repository.
+
+### EOS Profile & Guest Credential Persistence
+- **Device ID Deletion Suppression (`EOS_Connect_DeleteDeviceId`)**: Hooked and neutralized `EOS_Connect_DeleteDeviceId` inside `EpicOnlineBridge`. Preserves local EOS Device ID tokens and persistent PUIDs across sessions, eliminating repetitive username prompts and guest profile wipes on startup (e.g. in *Among Us*).
+
+### Manifest Engine, Local Disk Caching & Provider Expansion
+- **On-Disk Manifest Caching (`GetDepotManifest`)**: Hooked `GetDepotManifest` to store and load depot manifests from local disk cache, accelerating game file verifications and eliminating redundant network manifest requests.
+- **Provider Expansion & API Key Integration**: Added native support for ManifestDeX, Hubcap, and Manifesthub providers, complete with configurable API keys via `BetterLuma.toml` and updated HTTP User-Agent routing.
+
+### Spacewar Cloud Sync Error Suppression
+- **Spacewar (480) Cloud Frame Filtering**: Intercepted and blocked outbound cloud sync queries for AppID 480 during OnlineFix gameplay, resolving exit errors and spurious cloud sync failure notifications in the Steam UI.
+
 ## v0.4
 
 ### Global Achievement Caching & UI Display
