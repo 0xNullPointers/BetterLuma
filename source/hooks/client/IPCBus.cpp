@@ -268,6 +268,21 @@ namespace {
         return true;
     }
 
+    // Normalizes paths by removing extended-length prefixes (\\?\, \??\, \\?\UNC\)
+    // so that component-by-component comparisons between GetFinalPathNameByHandle
+    // and std::filesystem canonical paths do not fail due to prefix mismatch.
+    static std::filesystem::path StripExtendedPrefix(const std::filesystem::path& p) {
+        std::wstring s = p.native();
+        if (s.rfind(LR"(\\?\UNC\)", 0) == 0 || s.rfind(LR"(//?/UNC/)", 0) == 0) {
+            return LR"(\\)" + s.substr(8);
+        }
+        if (s.rfind(LR"(\\?\)", 0) == 0 || s.rfind(LR"(\??\)", 0) == 0 ||
+            s.rfind(LR"(//?/)", 0) == 0 || s.rfind(LR"(/??/)", 0) == 0) {
+            return s.substr(4);
+        }
+        return p;
+    }
+
     // Resolves and canonicalizes target save file path, verifying it strictly resides
     // within the intended userdata/<steamId32>/<appId>/remote/ directory.
     static bool ResolveSecureSavePath(const char* steamRoot, DWORD steamId32, AppId_t appId,
@@ -306,6 +321,8 @@ namespace {
         }
 
         // Verify that canonicalTarget is strictly a child under canonicalBase
+        canonicalBase = StripExtendedPrefix(canonicalBase);
+        canonicalTarget = StripExtendedPrefix(canonicalTarget);
         auto b = canonicalBase.begin();
         auto t = canonicalTarget.begin();
         while (b != canonicalBase.end() && t != canonicalTarget.end()) {
@@ -390,9 +407,9 @@ namespace {
         }
 
         // Query kernel for the physical canonical path of the open file object
-        char finalPath[MAX_PATH * 2]{};
-        DWORD len = GetFinalPathNameByHandleA(h, finalPath, sizeof(finalPath), FILE_NAME_NORMALIZED);
-        if (len == 0 || len >= sizeof(finalPath)) {
+        wchar_t finalPath[MAX_PATH * 2]{};
+        DWORD len = GetFinalPathNameByHandleW(h, finalPath, static_cast<DWORD>(std::size(finalPath)), FILE_NAME_NORMALIZED);
+        if (len == 0 || len >= std::size(finalPath)) {
             CloseHandle(h);
             return false;
         }
@@ -408,11 +425,10 @@ namespace {
         }
 
         std::filesystem::path resolvedPath(finalPath);
-        std::string resolvedStr = resolvedPath.string();
-        if (resolvedStr.rfind(R"(\\?\)", 0) == 0) {
-            resolvedStr.erase(0, 4);
-            resolvedPath = resolvedStr;
-        }
+
+        // Strip extended prefixes so both paths share identical root component formats
+        canonicalBase = StripExtendedPrefix(canonicalBase);
+        resolvedPath = StripExtendedPrefix(resolvedPath);
 
         // Verify resolved path strictly resides inside canonicalBase
         auto b = canonicalBase.begin();
