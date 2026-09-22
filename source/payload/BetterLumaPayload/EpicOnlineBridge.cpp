@@ -86,25 +86,63 @@ namespace {
         return EOS_Success;
     }
 
-    void StripPresence(const void* opts, size_t flagOffset, int32_t minApiVer) {
-        if (!opts) return;
-        if (*reinterpret_cast<const int32_t*>(opts) < minApiVer) return;
-        auto* flag = reinterpret_cast<EOS_Bool*>(
+    const void* MakePresenceStrippedCopy(const void* opts, size_t flagOffset, int32_t minApiVer,
+                                         void* outBuf, size_t outBufSize)
+    {
+        if (!opts) return nullptr;
+        if (*reinterpret_cast<const int32_t*>(opts) < minApiVer) return opts;
+
+        auto* flag = reinterpret_cast<const EOS_Bool*>(
             reinterpret_cast<uintptr_t>(opts) + flagOffset);
-        if (*flag) *flag = 0;
+        if (!*flag) return opts;
+
+        const uintptr_t addr = reinterpret_cast<uintptr_t>(opts);
+        const size_t bytesInFirstPage = 4096 - (addr & 0xFFF);
+        size_t copyBytes = outBufSize;
+
+        if (bytesInFirstPage < outBufSize) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            const void* nextExpectedPage = reinterpret_cast<const void*>(addr + bytesInFirstPage);
+            if (VirtualQuery(nextExpectedPage, &mbi, sizeof(mbi)) != 0 &&
+                mbi.State == MEM_COMMIT &&
+                !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+                // Next page is committed and accessible
+            } else {
+                copyBytes = bytesInFirstPage;
+            }
+        }
+
+        if (copyBytes < flagOffset + sizeof(EOS_Bool)) {
+            return opts;
+        }
+
+        std::memset(outBuf, 0, outBufSize);
+        std::memcpy(outBuf, opts, copyBytes);
+
+        auto* copyFlag = reinterpret_cast<EOS_Bool*>(
+            reinterpret_cast<uintptr_t>(outBuf) + flagOffset);
+        *copyFlag = 0;
+
+        return outBuf;
     }
 
     void EOS_CALL hkCreateLobby(EOS_HLobby h, const void* opts, void* cd, void* cb) {
-        StripPresence(opts, offsetof(EOS_Lobby_CreateLobbyOptions_Partial, bPresenceEnabled), 2);
-        oCreateLobby(h, opts, cd, cb);
+        alignas(8) uint8_t buf[256];
+        const void* effectiveOpts = MakePresenceStrippedCopy(
+            opts, offsetof(EOS_Lobby_CreateLobbyOptions_Partial, bPresenceEnabled), 2, buf, sizeof(buf));
+        oCreateLobby(h, effectiveOpts, cd, cb);
     }
     void EOS_CALL hkJoinLobby(EOS_HLobby h, const void* opts, void* cd, void* cb) {
-        StripPresence(opts, offsetof(EOS_Lobby_JoinLobbyOptions_Partial, bPresenceEnabled), 2);
-        oJoinLobby(h, opts, cd, cb);
+        alignas(8) uint8_t buf[256];
+        const void* effectiveOpts = MakePresenceStrippedCopy(
+            opts, offsetof(EOS_Lobby_JoinLobbyOptions_Partial, bPresenceEnabled), 2, buf, sizeof(buf));
+        oJoinLobby(h, effectiveOpts, cd, cb);
     }
     void EOS_CALL hkJoinLobbyById(EOS_HLobby h, const void* opts, void* cd, void* cb) {
-        StripPresence(opts, offsetof(EOS_Lobby_JoinLobbyByIdOptions_Partial, bPresenceEnabled), 1);
-        oJoinLobbyById(h, opts, cd, cb);
+        alignas(8) uint8_t buf[256];
+        const void* effectiveOpts = MakePresenceStrippedCopy(
+            opts, offsetof(EOS_Lobby_JoinLobbyByIdOptions_Partial, bPresenceEnabled), 1, buf, sizeof(buf));
+        oJoinLobbyById(h, effectiveOpts, cd, cb);
     }
 
     void EOS_CALL hkDeleteDeviceId(EOS_HConnect, const void*, void* cbData, EOS_Connect_OnDeleteDeviceIdCb cb) {
