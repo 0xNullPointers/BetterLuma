@@ -4,6 +4,7 @@
 
 #include "hooks/client/GlobalAchievementHooks.h"
 #include "hooks/client/StringFind.h"
+#include "hooks/capture/RuntimeCapture.h"
 #include "hooks/Macros.h"
 #include "core/entry.h"
 #include "stats/GlobalAchievementManager.h"
@@ -27,6 +28,33 @@ namespace {
 
     std::atomic<bool> g_installed{false};
 
+    static AppId_t ResolveEffectiveAppId(AppId_t appId) {
+        if (appId == kOnlineFixAppId || appId == 0 || SteamCapture::IsOnlineFixApp(appId)) {
+            AppId_t real = SteamCapture::ActiveRouteRealAppId();
+            if (!real) {
+                real = SteamCapture::ResolveAppId();
+            }
+            if (!real || real == kOnlineFixAppId) {
+                auto apps = SteamCapture::GetActiveOnlineFixApps();
+                if (apps.size() == 1) {
+                    real = apps.front();
+                }
+            }
+            if (real != 0 && real != kOnlineFixAppId) {
+                return real;
+            }
+        }
+        return appId;
+    }
+
+    static uint64_t MakeEffectiveGameId(uint64_t gameId, AppId_t effectiveAppId) {
+        AppId_t origAppId = static_cast<AppId_t>(gameId & 0xFFFFFF);
+        if (effectiveAppId != 0 && effectiveAppId != origAppId) {
+            return (gameId & ~0xFFFFFFULL) | static_cast<uint64_t>(effectiveAppId);
+        }
+        return gameId;
+    }
+
     SteamAPICall_t __fastcall hkRequestGlobalAchievementPercentages(void* pThis, const uint64_t* pGameID) {
         if (!pGameID) {
             return oRequestGlobalAchievementPercentages ? oRequestGlobalAchievementPercentages(pThis, pGameID) : k_uAPICallInvalid;
@@ -34,31 +62,41 @@ namespace {
 
         uint64_t gameId = *pGameID;
         AppId_t appId = static_cast<AppId_t>(gameId & 0xFFFFFF);
+        AppId_t effectiveAppId = ResolveEffectiveAppId(appId);
+        uint64_t effectiveGameId = MakeEffectiveGameId(gameId, effectiveAppId);
 
-        LOG_ACHIEVEMENTCH_INFO("RequestGlobalAchievementPercentages called: gameId=0x{:016X} appId={}", gameId, appId);
+        LOG_ACHIEVEMENTCH_INFO("RequestGlobalAchievementPercentages called: gameId=0x{:016X} appId={} effectiveAppId={}",
+                               gameId, appId, effectiveAppId);
 
-        if (appId != 0) {
-            GlobalAchievementManager::EnsureLoaded(appId, gameId);
+        if (effectiveAppId != 0) {
+            GlobalAchievementManager::EnsureLoaded(effectiveAppId, effectiveGameId);
         }
 
         SteamAPICall_t call = k_uAPICallInvalid;
         if (oRequestGlobalAchievementPercentages) {
-            call = oRequestGlobalAchievementPercentages(pThis, pGameID);
+            call = oRequestGlobalAchievementPercentages(pThis, &effectiveGameId);
         }
 
-        LOG_ACHIEVEMENTCH_INFO("Native RequestGlobalAchievementPercentages returned 0x{:016X} for appId={}", call, appId);
+        LOG_ACHIEVEMENTCH_INFO("Native RequestGlobalAchievementPercentages returned 0x{:016X} for appId={}", call, effectiveAppId);
         return call;
     }
 
     int __fastcall hkGetMostAchievedAchievementInfo(void* pThis, const uint64_t* pGameID, char* pchName, uint32 unNameBufLen, float* pflPercent, bool* pbAchieved) {
         if (pGameID) {
             AppId_t appId = static_cast<AppId_t>(*pGameID & 0xFFFFFF);
-            if (GlobalAchievementManager::HasData(appId)) {
-                return GlobalAchievementManager::GetMostAchievedAchievementInfo(appId, pchName, unNameBufLen, pflPercent, pbAchieved);
+            AppId_t effectiveAppId = ResolveEffectiveAppId(appId);
+            uint64_t effectiveGameId = MakeEffectiveGameId(*pGameID, effectiveAppId);
+
+            if (GlobalAchievementManager::HasData(effectiveAppId) || GlobalAchievementManager::EnsureLoaded(effectiveAppId, effectiveGameId)) {
+                int res = GlobalAchievementManager::GetMostAchievedAchievementInfo(effectiveAppId, pchName, unNameBufLen, pflPercent, pbAchieved);
+                if (res != -1) {
+                    return res;
+                }
             }
-        }
-        if (oGetMostAchievedAchievementInfo) {
-            return oGetMostAchievedAchievementInfo(pThis, pGameID, pchName, unNameBufLen, pflPercent, pbAchieved);
+
+            if (oGetMostAchievedAchievementInfo) {
+                return oGetMostAchievedAchievementInfo(pThis, &effectiveGameId, pchName, unNameBufLen, pflPercent, pbAchieved);
+            }
         }
         return -1;
     }
@@ -66,12 +104,19 @@ namespace {
     int __fastcall hkGetNextMostAchievedAchievementInfo(void* pThis, const uint64_t* pGameID, int iPreviousAchievement, char* pchName, uint32 unNameBufLen, float* pflPercent, bool* pbAchieved) {
         if (pGameID) {
             AppId_t appId = static_cast<AppId_t>(*pGameID & 0xFFFFFF);
-            if (GlobalAchievementManager::HasData(appId)) {
-                return GlobalAchievementManager::GetNextMostAchievedAchievementInfo(appId, iPreviousAchievement, pchName, unNameBufLen, pflPercent, pbAchieved);
+            AppId_t effectiveAppId = ResolveEffectiveAppId(appId);
+            uint64_t effectiveGameId = MakeEffectiveGameId(*pGameID, effectiveAppId);
+
+            if (GlobalAchievementManager::HasData(effectiveAppId) || GlobalAchievementManager::EnsureLoaded(effectiveAppId, effectiveGameId)) {
+                int res = GlobalAchievementManager::GetNextMostAchievedAchievementInfo(effectiveAppId, iPreviousAchievement, pchName, unNameBufLen, pflPercent, pbAchieved);
+                if (res != -1) {
+                    return res;
+                }
             }
-        }
-        if (oGetNextMostAchievedAchievementInfo) {
-            return oGetNextMostAchievedAchievementInfo(pThis, pGameID, iPreviousAchievement, pchName, unNameBufLen, pflPercent, pbAchieved);
+
+            if (oGetNextMostAchievedAchievementInfo) {
+                return oGetNextMostAchievedAchievementInfo(pThis, &effectiveGameId, iPreviousAchievement, pchName, unNameBufLen, pflPercent, pbAchieved);
+            }
         }
         return -1;
     }
@@ -79,12 +124,18 @@ namespace {
     bool __fastcall hkGetAchievementAchievedPercent(void* pThis, const uint64_t* pGameID, const char* pchName, float* pflPercent) {
         if (pGameID && pchName) {
             AppId_t appId = static_cast<AppId_t>(*pGameID & 0xFFFFFF);
-            if (GlobalAchievementManager::HasData(appId)) {
-                return GlobalAchievementManager::GetAchievementAchievedPercent(appId, pchName, pflPercent);
+            AppId_t effectiveAppId = ResolveEffectiveAppId(appId);
+            uint64_t effectiveGameId = MakeEffectiveGameId(*pGameID, effectiveAppId);
+
+            if (GlobalAchievementManager::HasData(effectiveAppId) || GlobalAchievementManager::EnsureLoaded(effectiveAppId, effectiveGameId)) {
+                if (GlobalAchievementManager::GetAchievementAchievedPercent(effectiveAppId, pchName, pflPercent)) {
+                    return true;
+                }
             }
-        }
-        if (oGetAchievementAchievedPercent) {
-            return oGetAchievementAchievedPercent(pThis, pGameID, pchName, pflPercent);
+
+            if (oGetAchievementAchievedPercent) {
+                return oGetAchievementAchievedPercent(pThis, &effectiveGameId, pchName, pflPercent);
+            }
         }
         return false;
     }
