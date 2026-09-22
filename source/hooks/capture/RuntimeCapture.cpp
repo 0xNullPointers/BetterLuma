@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <mutex>
@@ -400,6 +401,29 @@ namespace {
         return sep == L'\\';
     }
 
+    static bool PathCharsEqual(char a, char b) {
+        if (a == b) return true;
+        if ((a == '/' || a == '\\') && (b == '/' || b == '\\')) return true;
+        return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+    }
+
+    static bool PathPrefixEqual(std::string_view str, std::string_view prefix) {
+        if (str.size() < prefix.size()) return false;
+        for (size_t i = 0; i < prefix.size(); ++i) {
+            if (!PathCharsEqual(str[i], prefix[i])) return false;
+        }
+        return true;
+    }
+
+    static bool TryMatchAndReplaceArg0(std::string& cmd, std::string_view cand, const std::string& replacement) {
+        if (cand.empty() || cmd.size() < cand.size()) return false;
+        if (!PathPrefixEqual(std::string_view(cmd.data(), cand.size()), cand)) return false;
+        if (cmd.size() > cand.size() && cmd[cand.size()] != ' ' && cmd[cand.size()] != '\t') return false;
+
+        cmd.replace(0, cand.size(), replacement);
+        return true;
+    }
+
     static PlayBtnConfig ParseAndResolvePlayBtn(const char* exePath, const char* cmdLine, const char* workDir) {
         PlayBtnConfig result;
         if (!cmdLine || !*cmdLine) return result;
@@ -549,17 +573,40 @@ namespace {
             formattedExe = "\"" + formattedExe + "\"";
         }
 
+        std::string quotedReplacement = formattedExe;
+        if (quotedReplacement.empty() || quotedReplacement.front() != '"') {
+            quotedReplacement = "\"" + quotedReplacement + "\"";
+        }
+
+        // Clean any leading whitespace left after stripping -playbtn
+        size_t leading = strippedCmd.find_first_not_of(" \t");
+        if (leading != std::string::npos && leading > 0) {
+            strippedCmd.erase(0, leading);
+        }
+
         if (exePath && *exePath) {
             std::string origExe = exePath;
             std::string quotedOrig = "\"" + origExe + "\"";
 
-            if (strippedCmd.rfind(quotedOrig, 0) == 0) {
-                strippedCmd.replace(0, quotedOrig.length(), formattedExe);
-            } else if (strippedCmd.rfind(origExe, 0) == 0) {
-                if (strippedCmd.length() == origExe.length() ||
-                    strippedCmd[origExe.length()] == ' ' ||
-                    strippedCmd[origExe.length()] == '\t') {
-                    strippedCmd.replace(0, origExe.length(), formattedExe);
+            bool replaced = TryMatchAndReplaceArg0(strippedCmd, quotedOrig, quotedReplacement) ||
+                            TryMatchAndReplaceArg0(strippedCmd, origExe, formattedExe);
+
+            if (!replaced && !installDir.empty()) {
+                std::error_code relEc;
+                std::string rel = std::filesystem::relative(origExe, installDir, relEc).string();
+                if (!relEc && !rel.empty() && rel != "." && rel != origExe) {
+                    std::string quotedRel = "\"" + rel + "\"";
+                    replaced = TryMatchAndReplaceArg0(strippedCmd, quotedRel, quotedReplacement) ||
+                               TryMatchAndReplaceArg0(strippedCmd, rel, formattedExe);
+                }
+            }
+
+            if (!replaced) {
+                std::string origFilename = std::filesystem::path(origExe).filename().string();
+                if (!origFilename.empty() && origFilename != "." && origFilename != origExe) {
+                    std::string quotedFilename = "\"" + origFilename + "\"";
+                    replaced = TryMatchAndReplaceArg0(strippedCmd, quotedFilename, quotedReplacement) ||
+                               TryMatchAndReplaceArg0(strippedCmd, origFilename, formattedExe);
                 }
             }
         }
