@@ -46,9 +46,9 @@ namespace {
     }
 
     VOID CALLBACK OnDllLoad(ULONG reason, const LDR_DLL_NOTIF* d, PVOID) {
-        if (reason != LDR_LOADED || !d || !d->BaseDllName) return;
+        if (reason != LDR_LOADED || !d || !d->BaseDllName || !d->BaseDllName->Buffer || !d->DllBase) return;
         const size_t chars = d->BaseDllName->Length / sizeof(wchar_t);
-        if (chars >= MAX_PATH) return;
+        if (chars == 0 || chars >= MAX_PATH) return;
         wchar_t buf[MAX_PATH];
         memcpy(buf, d->BaseDllName->Buffer, d->BaseDllName->Length);
         buf[chars] = L'\0';
