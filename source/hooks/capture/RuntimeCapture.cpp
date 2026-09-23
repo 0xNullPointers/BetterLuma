@@ -89,6 +89,7 @@ namespace {
         AppId_t appId = 0;
         SteamCapture::OnlineFixRouteMode mode = SteamCapture::OnlineFixRouteMode::None;
         uint64_t registeredAt = 0;
+        uint64_t lastSeenAt = 0;
         bool seenInPacket = false;
     };
 
@@ -1218,6 +1219,7 @@ namespace SteamCapture {
         entry.appId = realAppId;
         entry.mode = mode;
         entry.registeredAt = GetTickCount64();
+        entry.lastSeenAt = entry.registeredAt;
         entry.seenInPacket = false;
         g_OnlineFixRealAppId.store(realAppId, std::memory_order_release);
         g_OnlineFixRouteMode.store(static_cast<uint32>(mode), std::memory_order_release);
@@ -1230,6 +1232,7 @@ namespace SteamCapture {
         std::scoped_lock lock(g_onlineFixMutex);
         auto it = g_onlineFixAppEntries.find(realAppId);
         if (it != g_onlineFixAppEntries.end()) {
+            it->second.lastSeenAt = GetTickCount64();
             if (!it->second.seenInPacket) {
                 it->second.seenInPacket = true;
                 LOG_MISC_INFO("OnlineFix: appid {} confirmed active in games played packet", realAppId);
@@ -1242,8 +1245,32 @@ namespace SteamCapture {
         std::scoped_lock lock(g_onlineFixMutex);
         auto it = g_onlineFixAppEntries.find(realAppId);
         if (it == g_onlineFixAppEntries.end()) return true;
-        if (it->second.seenInPacket) return true;
-        uint64_t elapsed = GetTickCount64() - it->second.registeredAt;
+
+        // Check if any process associated with this app is still running
+        for (const auto& [pid, appId] : g_onlineFixPidToAppId) {
+            if (appId == realAppId) {
+                HANDLE h = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+                if (h) {
+                    DWORD exitCode = 0;
+                    bool active = (GetExitCodeProcess(h, &exitCode) && exitCode == STILL_ACTIVE);
+                    CloseHandle(h);
+                    if (active) return false;
+                }
+            }
+        }
+
+        uint64_t now = GetTickCount64();
+        if (it->second.seenInPacket) {
+            uint64_t elapsed = now - it->second.lastSeenAt;
+            if (elapsed > 10000) {
+                LOG_MISC_INFO("OnlineFix: appid {} absent from games played packet for {}ms, unregistering",
+                              realAppId, elapsed);
+                return true;
+            }
+            return false;
+        }
+
+        uint64_t elapsed = now - it->second.registeredAt;
         if (elapsed > 20000) {
             LOG_MISC_WARN("OnlineFix: appid {} never appeared in games played packet, grace period expired ({}ms)",
                           realAppId, elapsed);

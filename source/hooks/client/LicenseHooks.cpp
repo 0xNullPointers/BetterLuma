@@ -258,42 +258,8 @@ namespace {
         return oGetRemoteStorageSyncState(pRemoteStorage, appId);
     }
 
-    // Hook for ConfigStore::GetBinary - intercepts depot decryption key fetches.
-    // The real binary signature is int32 f(void*, EConfigStore, const char*, char*, uint32)
-    // verified from the published prologue at RVA 0x5B3870: "48 63 FA" = movsxd rdi, edx
-    // confirms the second param is a 32-bit enum, not a pointer.
-    LM_HOOK(ConfigStoreGetBinary, int32, void* pObject, EConfigStore eConfigStore, const char* KeyName, char* pBuffer, uint32 cbBuffer) {
-        if (!KeyName) return oConfigStoreGetBinary(pObject, eConfigStore, KeyName, pBuffer, cbBuffer);
-
-        std::string_view keyPath(KeyName);
-        constexpr std::string_view kDepotPrefix = "Software\\Valve\\Steam\\depots\\";
-        if (keyPath.find(kDepotPrefix) != 0)
-            return oConfigStoreGetBinary(pObject, eConfigStore, KeyName, pBuffer, cbBuffer);
-
-        std::string seg(keyPath.substr(kDepotPrefix.size()));
-        if (auto slash = seg.find('\\'); slash != std::string::npos)
-            seg.resize(slash);
-
-        char* end = nullptr;
-        AppId_t depotId = static_cast<AppId_t>(strtoul(seg.c_str(), &end, 10));
-        if (end == seg.c_str() || depotId == 0)
-            return oConfigStoreGetBinary(pObject, eConfigStore, KeyName, pBuffer, cbBuffer);
-
-        std::vector<uint8_t> depotKey = LuaLoader::GetDecryptionKey(depotId);
-        if (depotKey.empty())
-            return oConfigStoreGetBinary(pObject, eConfigStore, KeyName, pBuffer, cbBuffer);
-
-        LOG_LICENSECH_INFO("ConfigStoreGetBinary: slapped key for depot={} len={}", depotId, depotKey.size());
-
-        if (cbBuffer < depotKey.size())
-            return oConfigStoreGetBinary(pObject, eConfigStore, KeyName, pBuffer, cbBuffer);
-
-        memcpy(pBuffer, depotKey.data(), depotKey.size());
-        return static_cast<int32>(depotKey.size());
-    }
-
     LM_HOOK(RequiresLegacyCDKey, bool, void* pUser, AppId_t appId, uint32_t* pOut) {
-        if (LuaLoader::HasDepot(appId)) {
+        if (LuaLoader::IsLuaTrackedApp(appId)) {
             LOG_LICENSECH_INFO("RequiresLegacyCDKey: appId={} suppressed (Lua-tracked)", appId);
             if (pOut) *pOut = 0;
             return false;
@@ -306,8 +272,6 @@ namespace {
 namespace LicenseHooks {
 
     void Install() {
-        LM_BIND(ConfigStoreGetBinary);
-
         LM_TX_BEGIN();
         LM_INSTALL(OptedInMask);
         LM_INSTALL(IsCloudEnabledForApp);
@@ -316,7 +280,6 @@ namespace LicenseHooks {
         LM_INSTALL(RunAutoCloudOnAppExit);
         LM_INSTALL(GetRemoteStorageSyncState);
         LM_INSTALL(RequiresLegacyCDKey);
-        LM_INSTALL(ConfigStoreGetBinary);
         LM_TX_COMMIT();
 
         const int cloudGateCount =
@@ -331,12 +294,11 @@ namespace LicenseHooks {
             cloudGateCount > 0);
 
         LOG_LICENSECH_INFO(
-            "LicenseHooks::Install: OptedInMask={} IsCloudEnabledForApp={} AutoCloudSyncGate={}/4 RequiresLegacyCDKey={} ConfigStoreGetBinary={}",
+            "LicenseHooks::Install: OptedInMask={} IsCloudEnabledForApp={} AutoCloudSyncGate={}/4 RequiresLegacyCDKey={}",
             oOptedInMask         ? "attached" : "skipped (TOML entry missing)",
             oIsCloudEnabledForApp ? "attached" : "skipped (TOML entry missing)",
             cloudGateCount,
-            oRequiresLegacyCDKey ? "attached" : "skipped (TOML entry missing)",
-            oConfigStoreGetBinary ? "attached" : "skipped (TOML entry missing)");
+            oRequiresLegacyCDKey ? "attached" : "skipped (TOML entry missing)");
     }
 
     void Uninstall() {
@@ -348,7 +310,6 @@ namespace LicenseHooks {
         LM_REMOVE(IsCloudEnabledForApp);
         LM_REMOVE(RequiresLegacyCDKey);
         LM_REMOVE(OptedInMask);
-        LM_REMOVE(ConfigStoreGetBinary);
         LM_TX_COMMIT();
         LOG_LICENSECH_INFO("LicenseHooks::Uninstall: complete");
     }

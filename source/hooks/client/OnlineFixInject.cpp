@@ -57,9 +57,16 @@ namespace {
             path.remove_suffix(1);
         if (path.empty()) return {};
 
+        std::wstring raw(path);
+        wchar_t longBuf[MAX_PATH * 2] = {};
+        DWORD len = GetLongPathNameW(raw.c_str(), longBuf, static_cast<DWORD>(std::size(longBuf)));
+        std::wstring_view target = (len > 0 && len < std::size(longBuf))
+            ? std::wstring_view(longBuf, len)
+            : path;
+
         std::wstring out;
-        out.reserve(path.size());
-        for (wchar_t c : path) {
+        out.reserve(target.size());
+        for (wchar_t c : target) {
             if (c == L'/') c = L'\\';
             out.push_back(static_cast<wchar_t>(towlower(c)));
         }
@@ -425,7 +432,11 @@ namespace {
 
         BOOL ok = fwd(flags | CREATE_SUSPENDED);
         if (!ok) {
-            LOG_ONLINEFIX_WARN("appid={} spawn failed err={}", appId, GetLastError());
+            LOG_ONLINEFIX_WARN("appid={} spawn failed err={}, restoring queue", appId, GetLastError());
+            {
+                std::scoped_lock lock(g_queueLock);
+                g_queue.push_back(claimed);
+            }
             return ok;
         }
 

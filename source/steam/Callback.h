@@ -66,18 +66,18 @@ struct UserAchievementStored_t
 //-----------------------------------------------------------------------------
 struct UserStatsReceived_t
 {
-	static constexpr int k_iCallback = 1102;
+	static constexpr int k_iCallback = 1101;
 };
 
 //-----------------------------------------------------------------------------
-// Purpose: Result of StoreStats (callback id 1101). Layout starts with a
+// Purpose: Result of StoreStats (callback id 1102). Layout starts with a
 //          uint64 m_nGameID; the OnlineFix dual-dispatch path rewrites the
 //          low 24 bits from the real appid back to 480 so the game's
 //          appid-480 callback registration sees the storage result.
 //-----------------------------------------------------------------------------
 struct UserStatsStored_t
 {
-	static constexpr int k_iCallback = 1101;
+	static constexpr int k_iCallback = 1102;
 };
 
 //-----------------------------------------------------------------------------

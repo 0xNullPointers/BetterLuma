@@ -552,6 +552,7 @@ namespace {
                                     LOG_IPCRTR_WARN("\"evt\" \"SaveInject\" \"err\" \"path-rejected\" \"file\" \"{}\"", filenameBuf);
                                 } else {
                                     auto ensureCap = [&](uint32_t need) -> bool {
+                                        if (!pWrite) return false;
                                         if (pWrite->m_Memory.m_nAllocationCount >= need) return true;
                                         if (!pWrite->m_PutOverflowFunc) return false;
                                         return (pWrite->*pWrite->m_PutOverflowFunc)(need);
@@ -670,13 +671,6 @@ namespace {
         const bool ok = oIPCProcessMessage(pServer, hPipe, pRead, pWrite);
 
         if (!ok || !f.handler) return ok;
-
-        AppId_t appId = SteamCapture::ResolveAppId();
-        if (!LuaLoader::HasDepot(appId)) {
-            LOG_IPCRTR_INFO("\"cmd\" \"{}\" \"appId\" {} \"action\" \"skip-nodepot\" \"pipe\" \"{}\"",
-                f.handler->name, appId, f.pipe ? f.pipe->DebugString() : "null");
-            return ok;
-        }
 
         f.handler->handler(f.pipe, pRead, pWrite);
         return ok;

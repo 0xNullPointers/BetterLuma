@@ -208,8 +208,8 @@ namespace RichPresence {
             LOG_MISCCH_TRACE("RichPresence: no realAppId (no -onlinefix active), skip");
             return false;
         }
-        if (!LuaLoader::HasDepot(realAppId)) {
-            LOG_MISCCH_TRACE("RichPresence: realAppId={} not in depot list, skip", realAppId);
+        if (!LuaLoader::HasDepot(realAppId) && !SteamCapture::IsOnlineFixApp(realAppId)) {
+            LOG_MISCCH_TRACE("RichPresence: realAppId={} not in depot list or onlinefix, skip", realAppId);
             return false;
         }
         if (SteamStubAuto::IsActive()) {
@@ -293,7 +293,7 @@ namespace RichPresence {
         }
 
         AppId_t next = 0;
-        if (tailApp != 0 && tailApp != kOnlineFixAppId && LuaLoader::HasDepot(tailApp))
+        if (tailApp != 0 && tailApp != kOnlineFixAppId && (LuaLoader::HasDepot(tailApp) || SteamCapture::IsOnlineFixApp(tailApp)))
             next = tailApp;
 
         if (next == g_visibleApp)
@@ -343,25 +343,22 @@ namespace RichPresence {
         if (!pPacket || !callOriginal)
             return;
 
-        uint8 staged[kPacketLimit];
-        uint32 stagedLen = 0;
+        std::vector<uint8_t> staged;
         {
             std::lock_guard<std::mutex> guard(g_lock);
             if (!g_staged || g_stagedPacketLen == 0)
                 return;
-            stagedLen = g_stagedPacketLen;
-            std::memcpy(staged, g_stagedPacket, stagedLen);
+            staged.assign(g_stagedPacket, g_stagedPacket + g_stagedPacketLen);
             g_staged = false;
         }
 
-        uint8* originalData = pPacket->m_pubData;
-        uint32 originalSize = pPacket->m_cubData;
-        pPacket->m_pubData = staged;
-        pPacket->m_cubData = stagedLen;
-        callOriginal(pThis, pPacket);
-        pPacket->m_pubData = originalData;
-        pPacket->m_cubData = originalSize;
-        LOG_MISCCH_INFO("RichPresence: delivered staged persona packet bytes={}", stagedLen);
+        CNetPacket stagedPkt = *pPacket;
+        stagedPkt.m_pubData = staged.data();
+        stagedPkt.m_cubData = static_cast<uint32>(staged.size());
+        stagedPkt.m_cRef = 1;
+        stagedPkt.m_pNext = nullptr;
+        callOriginal(pThis, &stagedPkt);
+        LOG_MISCCH_INFO("RichPresence: delivered staged persona packet bytes={}", staged.size());
     }
 
     AppId_t GetPlayingApp()

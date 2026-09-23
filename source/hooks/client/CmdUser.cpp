@@ -193,6 +193,7 @@ namespace CmdUser::SteamID {
     //  Response: [uint8 prefix=0x0B][uint64 SteamID]   (9 bytes)
     void OnGetSteamID(CSteamPipeClient* pipe, CUtlBuffer*, CUtlBuffer* pWrite)
     {
+        if (!pWrite || !pWrite->Base()) return;
         AppId_t appId = PipeWatch::ResolveAppId(pipe);
         const bool tracked = LuaLoader::IsLuaTrackedApp(appId);
         const bool managed = LuaLoader::HasDepot(appId);
@@ -267,7 +268,7 @@ namespace CmdUser::Tickets {
     //  IPC-USER  Handler: IClientUser::GetAppOwnershipTicketExtendedData
     void OnGetOwnershipTicketExtended(CSteamPipeClient* pipe, CUtlBuffer* pRead, CUtlBuffer* pWrite)
     {
-        if (!pRead || !pRead->Base()) return;
+        if (!pRead || !pRead->Base() || !pWrite) return;
         const uint8_t* reqData = pRead->Base();
         const int32  reqSize = pRead->m_Put;
         LOG_USRCMD_INFO("\"handler\" \"GetAppOwnershipTicketExtendedData\" \"size\" {}", reqSize);
@@ -310,6 +311,7 @@ namespace CmdUser::Tickets {
         SteamCapture::EnsureBufferSize(pWrite, static_cast<int32>(totalSize));
 
         uint8_t* base = pWrite->Base();
+        if (!base) return;
 
         base[0] = IPC_REPLY_TAG;
         memcpy(base + 1, &returnValue, 4);
@@ -345,6 +347,7 @@ namespace CmdUser::Tickets {
     //  IPC-USER  Handler: IClientUser::RequestEncryptedAppTicket
     void OnRequestEncrypted(CSteamPipeClient* pipe, CUtlBuffer*, CUtlBuffer* pWrite)
     {
+        if (!pWrite || !pWrite->Base()) return;
         AppId_t appId = PipeWatch::ResolveAppId(pipe);
         LOG_USRCMD_INFO("\"handler\" \"RequestEncryptedAppTicket\" \"appId\" {} \"write\" {}", appId, pWrite->m_Put);
         if (pWrite->m_Put < 9) {
@@ -369,6 +372,7 @@ namespace CmdUser::Tickets {
     //  IPC-USER  Handler: IClientUser::GetEncryptedAppTicket
     void OnGetEncrypted(CSteamPipeClient* pipe, CUtlBuffer*, CUtlBuffer* pWrite)
     {
+        if (!pWrite) return;
         AppId_t appId = PipeWatch::ResolveAppId(pipe);
         LOG_USRCMD_INFO("\"handler\" \"GetEncryptedAppTicket\" \"appId\" {} \"enter\" 1", appId);
         auto ticket = Ticket::GetEncryptedTicketFromRegistry(appId);
@@ -382,6 +386,7 @@ namespace CmdUser::Tickets {
         SteamCapture::EnsureBufferSize(pWrite, totalSize);
 
         uint8_t* base = pWrite->Base();
+        if (!base) return;
         base[0] = IPC_REPLY_TAG;
         base[1] = 1;
         memcpy(base + 2, &ticketSize, sizeof(ticketSize));
@@ -465,6 +470,7 @@ namespace CmdUser::Utils {
     static bool OnAchievementStatsResult(
         HSteamPipe pipe, CUtlBuffer* pWrite, int iCallback, uint32_t cubCallback)
     {
+        if (!pWrite || !pWrite->Base()) return false;
         if (!SteamCapture::HasActiveOnlineFixApps() && !SteamStubAuto::IsActive()) return false;
         if (cubCallback < sizeof(uint64_t)) return false;
         const int32 minTotal = static_cast<int32>(2 + sizeof(uint64_t));
