@@ -720,12 +720,7 @@ namespace {
                           routeReason, SteamCapture::OnlineFixRouteModeName(routeMode),
                           appId);
             SyncLanguageToSpacewar(appId);
-            if (detectedSteamStub) {
-                SteamStubAuto::Arm(appId, exePath, probeSteamStub ? steamStubProbe.imagePath : "");
-                LOG_MISC_INFO("SpawnProcess: -onlinefix with SteamStub DRM, armed ticket handler");
-            } else {
-                SteamStubAuto::Clear();
-            }
+            SteamStubAuto::Clear();
             OnlineFixInject::QueueInjection(exePath, appId);
         } else if (steamStubAuto) {
             SteamCapture::SetOnlineFixRoute(0, SteamCapture::OnlineFixRouteMode::None);

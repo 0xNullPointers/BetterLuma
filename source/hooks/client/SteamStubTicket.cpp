@@ -6,6 +6,7 @@
 #include "hooks/client/SteamStubTicket.h"
 #include "hooks/client/PipeWatch.h"
 #include "hooks/client/SteamStubAuto.h"
+#include "hooks/capture/SteamCapture.h"
 #include "runtime/Logger.h"
 
 namespace {
@@ -154,10 +155,15 @@ namespace SteamStubTicket {
     }
 
     bool ResolveRequest(CSteamPipeClient* pipe, AppId_t requestedAppId, AppId_t& ticketAppId) {
-        if (!SteamStubAuto::IsActive())
+        AppId_t realAppId = 0;
+        if (SteamStubAuto::IsActive()) {
+            realAppId = SteamStubAuto::RealAppId();
+        } else if (SteamCapture::HasActiveOnlineFixApps()) {
+            realAppId = SteamCapture::ActiveRouteRealAppId();
+        } else {
             return false;
+        }
 
-        AppId_t realAppId = SteamStubAuto::RealAppId();
         if (!realAppId || realAppId == kOnlineFixAppId)
             return false;
 
